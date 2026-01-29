@@ -2,7 +2,6 @@ import cv2
 import time
 import os
 import argparse
-import picamera2
 import numpy as np
 
 # Resolution matches threadCamera.py configuration

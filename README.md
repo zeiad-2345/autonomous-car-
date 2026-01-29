@@ -20,6 +20,16 @@ The `002a-ipm-matrix-calc` branch introduces tools to calculate the Inverse Pers
 - Obstacle distance estimation
 - Ground plane projection
 
+### Local Development (Mac/PC)
+To test the calibration tools without a Raspberry Pi:
+1.  Initialize the environment:
+    ```bash
+    python3 -m venv venv
+    source venv/bin/activate
+    pip install -r requirements-mac.txt
+    ```
+2.  The `collect_images.py` script will automatically fall back to your webcam if the Pi Camera is not found.
+
 ### Tools Added
 Located in `calibration/`:
 
