@@ -12,6 +12,23 @@ The project contains all the provided code for the RPi, more precisely:
 
 ---
 
+## Feature: Video Stream Handler (001b)
+
+### Overview
+The `001b-video-stream-handler` branch implements the "Eyes" of the RAVEN platform for the ROS1 Noetic stack. It bridges the simulation world (Gazebo) with the computer vision stack (OpenCV).
+- **Subscribes to**: `/camera/rgb/image_raw` (Gazebo Camera)
+- **converts**: ROS `sensor_msgs/Image` -> OpenCV `numpy.ndarray` (BGR8)
+- **preview**: Displays a live feed in a "RAVEN Eye" window (Desktop only).
+
+### Run the Node
+```bash
+#  Make sure you are in the ROS environment (ros_packages/raven_vision)
+python3 ros_packages/raven_vision/src/video_stream_handler.py
+```
+*Note: A running `roscore` and Gazebo simulation are required.*
+
+---
+
 ## Feature: IPM Matrix Calculation (002a)
 
 ### Overview
