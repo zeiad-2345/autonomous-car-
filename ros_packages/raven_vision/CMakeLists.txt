@@ -16,5 +16,6 @@ include_directories(
 
 catkin_install_python(PROGRAMS
   src/video_stream_handler.py
+  src/lane_segmentation.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
