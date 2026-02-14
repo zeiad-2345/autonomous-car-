@@ -29,8 +29,22 @@
 import cv2
 import threading
 import base64
-import picamera2
+try:
+    import picamera2
+except ImportError:
+    picamera2 = None
 import time
+import os
+import numpy as np
+
+# ROS Imports (Conditional)
+try:
+    import rospy
+    from sensor_msgs.msg import Image
+    from cv_bridge import CvBridge, CvBridgeError
+    ROS_AVAILABLE = True
+except ImportError:
+    ROS_AVAILABLE = False
 
 from src.utils.messages.allMessages import (
     mainCamera,
@@ -64,6 +78,9 @@ class threadCamera(ThreadWithStop):
         self.frame_rate = 5
         self.recording = False
 
+        # Simulation Mode Flag
+        self.is_simulation = os.getenv("RAVEN_SIMULATION", "false").lower() == "true"
+        
         self.video_writer = ""
 
         self.recordingSender = messageHandlerSender(self.queuesList, Recording)
@@ -95,17 +112,39 @@ class threadCamera(ThreadWithStop):
         """This function will run while the running flag is True. 
         It captures the image from camera and make the required modifies 
         and then it send the data to process gateway."""
-        # if camera is not available, skip processing
-        if self.camera is None:
+        
+        # In simulation, wait for image from ROS callback
+        if self.is_simulation:
+            if not self.latest_ros_image:
+                 time.sleep(0.1)
+                 return
+            
+            # Use the latest image from ROS
+            mainRequest = self.latest_ros_image
+            # Just resize or crop for "lores" if needed, or use same.
+            # Real cam does: main=(2048, 1080), lores=(512, 270)
+            serialRequest = cv2.resize(mainRequest, (512, 270))
+        
+        # In real mode, if camera is missing, skip
+        elif self.camera is None:
             time.sleep(0.1)
             return
+        else:
+             try:
+                # Real Camera Capture
+                mainRequest = self.camera.capture_array("main")
+                serialRequest = self.camera.capture_array("lores")
+             except Exception as e:
+                print(f"\033[1;97m[ Camera ] :\033[0m \033[1;91mERROR\033[0m - Capture failed: {e}")
+                return
             
         try:
             recordRecv = self.recordSubscriber.receive()
             if recordRecv is not None: 
                 self.recording = bool(recordRecv)
                 if recordRecv == False:
-                    self.video_writer.release() # type: ignore
+                    if self.video_writer:
+                        self.video_writer.release() # type: ignore
                 else:
                     fourcc = cv2.VideoWriter_fourcc( # type: ignore
                         *"XVID"
@@ -121,13 +160,14 @@ class threadCamera(ThreadWithStop):
             print(f"\033[1;97m[ Camera ] :\033[0m \033[1;91mERROR\033[0m - {e}")
 
         try:
-            mainRequest = self.camera.capture_array("main")
-            serialRequest = self.camera.capture_array("lores")  # Will capture an array that can be used by OpenCV library
-
-            if self.recording == True:
+            if self.recording == True and self.video_writer:
                 self.video_writer.write(mainRequest) # type: ignore
 
-            serialRequest = cv2.cvtColor(serialRequest, cv2.COLOR_YUV2BGR_I420) # type: ignore
+            # Convert for serial (Sim images are already BGR usually, but let's check source)
+            # Picamera 'lores' is YUV420, so it needs conversion. 
+            # ROS images are converted to BGR in callback. 
+            if not self.is_simulation:
+                serialRequest = cv2.cvtColor(serialRequest, cv2.COLOR_YUV2BGR_I420) # type: ignore
 
             _, mainEncodedImg = cv2.imencode(".jpg", mainRequest) # type: ignore
             _, serialEncodedImg = cv2.imencode(".jpg", serialRequest) # type: ignore
@@ -141,7 +181,7 @@ class threadCamera(ThreadWithStop):
             self.mainCameraSender.send(mainEncodedImageData)
             self.serialCameraSender.send(serialEncodedImageData)
         except Exception as e:
-            print(f"\033[1;97m[ Camera ] :\033[0m \033[1;91mERROR\033[0m - {e}")
+            print(f"\033[1;97m[ Camera ] :\033[0m \033[1;91mERROR\033[0m - Processing failed: {e}")
 
     # ================================ STATE CHANGE HANDLER ========================================
     def state_change_handler(self):
@@ -155,8 +195,39 @@ class threadCamera(ThreadWithStop):
     # ================================ INIT CAMERA ========================================
     def _init_camera(self):
         """This function will initialize the camera object. It will make this camera object have two chanels "lore" and "main"."""
+        
+        self.camera = None
+        self.latest_ros_image = None
+        self.bridge = None
 
+        if self.is_simulation:
+            print(f"\033[1;97m[ Camera Thread ] :\033[0m \033[1;94mINFO\033[0m - Simulation Mode Detected. Initializing ROS Subscriber...")
+            if not ROS_AVAILABLE:
+                print(f"\033[1;97m[ Camera Thread ] :\033[0m \033[1;91mERROR\033[0m - ROS not found. Cannot run simulation mode.")
+                return
+
+            try:
+                # We assume roscore is running and node is initialized in main or here. 
+                # Since this is a thread inside a multiprocess, it's safer if the process initialized the node or we do it anonymously here if not done.
+                # However, usually one node per process. processCamera.py doesn't seem to init node.
+                # Let's try checking if node is initialized, if not init it.
+                if rospy.get_name() == "/unnamed":
+                    rospy.init_node('raven_brain_camera', anonymous=True)
+                
+                self.bridge = CvBridge()
+                # Topic from raven-sim/README or standard
+                self.image_sub = rospy.Subscriber("/camera/rgb/image_raw", Image, self.ros_callback)
+                print(f"\033[1;97m[ Camera Thread ] :\033[0m \033[1;92mINFO\033[0m - Subscribed to /camera/rgb/image_raw")
+            except Exception as e:
+                print(f"\033[1;97m[ Camera Thread ] :\033[0m \033[1;91mERROR\033[0m - Failed to init ROS: {e}")
+            return
+
+        # REAL HARDWARE MODE
         try:
+            if picamera2 is None:
+                 print(f"\033[1;97m[ Camera Thread ] :\033[0m \033[1;91mERROR\033[0m - picamera2 lib not found.")
+                 return
+
             # check if camera is available
             if len(picamera2.Picamera2.global_camera_info()) == 0:
                 print(f"\033[1;97m[ Camera Thread ] :\033[0m \033[1;91mERROR\033[0m - No camera detected. Camera functionality will be disabled.")
@@ -178,6 +249,15 @@ class threadCamera(ThreadWithStop):
             print(f"\033[1;97m[ Camera Thread ] :\033[0m \033[1;91mERROR\033[0m - Failed to initialize camera: {e}")
             self.camera = None
 
+    def ros_callback(self, data):
+        """Callback for ROS Image messages"""
+        try:
+            cv_image = self.bridge.imgmsg_to_cv2(data, "bgr8")
+            self.latest_ros_image = cv_image
+        except Exception as e:
+            # Avoid spamming logs in high freq
+            pass
+
     # =============================== STOP ================================================
     def stop(self):
         if self.recording and self.video_writer:
@@ -195,22 +275,24 @@ class threadCamera(ThreadWithStop):
             message = self.brightnessSubscriber.receive()
             if self.debugger:
                 self.logger.info(str(message))
-            self.camera.set_controls(
-                {
-                    "AeEnable": False,
-                    "AwbEnable": False,
-                    "Brightness": max(0.0, min(1.0, float(message))), # type: ignore
-                }
-            )
+            if self.camera:
+                self.camera.set_controls(
+                    {
+                        "AeEnable": False,
+                        "AwbEnable": False,
+                        "Brightness": max(0.0, min(1.0, float(message))), # type: ignore
+                    }
+                )
         if self.contrastSubscriber.is_data_in_pipe():
             message = self.contrastSubscriber.receive() # de modificat marti uc camera noua 
             if self.debugger:
                 self.logger.info(str(message))
-            self.camera.set_controls(
-                {
-                    "AeEnable": False,
-                    "AwbEnable": False,
-                    "Contrast": max(0.0, min(32.0, float(message))), # type: ignore
-                }
-            )
+            if self.camera:
+                self.camera.set_controls(
+                    {
+                        "AeEnable": False,
+                        "AwbEnable": False,
+                        "Contrast": max(0.0, min(32.0, float(message))), # type: ignore
+                    }
+                )
         threading.Timer(1, self.configs).start()
