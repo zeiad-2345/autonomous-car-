@@ -69,14 +69,15 @@ class processSerialHandler(WorkerProcess):
         self.serialCon = None
         self.serialConnected = False
         self.serialDevice = None
-        self.serialLock = Lock()
+        self.serialLock = None # Initialized in run() to avoid pickling issues
         self.reconnecting = False
 
         self._init_subscribers()
         self._init_senders()
 
         # log file init
-        self.historyFile = FileHandler(logFile)
+        self.historyFile = None # Initialized in run()
+        self.logFileName = logFile
 
         super(processSerialHandler, self).__init__(self.queuesList, ready_event)
 
@@ -104,12 +105,30 @@ class processSerialHandler(WorkerProcess):
                 # clean up existing connection safely
                 self._safe_close_serial()
 
-                self.serialDevice = next((port.device for port in serial.tools.list_ports.comports() if re.match(r"/dev/ttyACM\d+", port.device)), None)
-                self.serialCon = serial.Serial(self.serialDevice, 115200, timeout=0.1)
-                self.serialCon.reset_input_buffer()
-                self.serialCon.reset_output_buffer()
-                self.serialConnected = True
-                print(f"\033[1;97m[ Serial Handler ] :\033[0m \033[1;92mINFO\033[0m - Connected to \033[94m{self.serialDevice}\033[0m")
+                # smart detection
+                ports = serial.tools.list_ports.comports()
+                target_port = None
+                
+                for port in ports:
+                    # Linux / standard detection
+                    if re.match(r"/dev/ttyACM\d+", port.device):
+                        target_port = port.device
+                        break
+                    # macOS / Arduino detection
+                    if "usbmodem" in port.device or "usbserial" in port.device:
+                        target_port = port.device
+                        break
+                
+                self.serialDevice = target_port
+                
+                if self.serialDevice:
+                    self.serialCon = serial.Serial(self.serialDevice, 115200, timeout=0.1)
+                    self.serialCon.reset_input_buffer()
+                    self.serialCon.reset_output_buffer()
+                    self.serialConnected = True
+                    print(f"\033[1;97m[ Serial Handler ] :\033[0m \033[1;92mINFO\033[0m - Connected to \033[94m{self.serialDevice}\033[0m")
+                else:
+                    raise FileNotFoundError("No suitable serial port found")
 
             except (serial.SerialException, FileNotFoundError):
                 self._safe_close_serial()
@@ -176,6 +195,12 @@ class processSerialHandler(WorkerProcess):
     # ===================================== RUN ==========================================
     def run(self):
         """Apply the initializing methods and start the threads."""
+        if self.serialLock is None:
+            self.serialLock = threading.Lock()
+        
+        if self.historyFile is None:
+            self.historyFile = FileHandler(self.logFileName)
+
         self._try_serial_connection()
 
         if not self.serialConnected:

@@ -45,7 +45,11 @@ import psutil
 
 # Pin to CPU cores 0–3
 available_cores = list(range(psutil.cpu_count()))
-psutil.Process(os.getpid()).cpu_affinity(available_cores)
+try:
+    psutil.Process(os.getpid()).cpu_affinity(available_cores)
+except AttributeError:
+    # cpu_affinity is not available on macOS/Windows
+    pass
 
 sys.path.append(".")
 from multiprocessing import Queue, Event
@@ -104,107 +108,108 @@ def manage_process_life(process_class, process_instance, process_args, enabled, 
             process_instance = None
     return process_instance 
 
-# ======================================== SETTING UP ====================================
+if __name__ == "__main__":
+    # ======================================== SETTING UP ====================================
 
-print(BigPrint.PLEASE_WAIT.value)
-allProcesses = list()
-allEvents = list()
+    print(BigPrint.PLEASE_WAIT.value)
+    allProcesses = list()
+    allEvents = list()
 
-queueList = {
-    "Critical": Queue(),
-    "Warning": Queue(),
-    "General": Queue(),
-    "Config": Queue(),
-    "Log": Queue(),
-}
-logging = logging.getLogger()
+    queueList = {
+        "Critical": Queue(),
+        "Warning": Queue(),
+        "General": Queue(),
+        "Config": Queue(),
+        "Log": Queue(),
+    }
+    logging = logging.getLogger()
 
-original_stdout = sys.stdout
-original_stderr = sys.stderr
+    original_stdout = sys.stdout
+    original_stderr = sys.stderr
 
-queue_writer = QueueWriter(queueList["Log"])
-sys.stdout = MultiWriter(original_stdout, queue_writer)
-sys.stderr = MultiWriter(original_stderr, queue_writer)
+    queue_writer = QueueWriter(queueList["Log"])
+    sys.stdout = MultiWriter(original_stdout, queue_writer)
+    sys.stderr = MultiWriter(original_stderr, queue_writer)
 
-# ===================================== INITIALIZE ==================================
+    # ===================================== INITIALIZE ==================================
 
-stateChangeSubscriber = messageHandlerSubscriber(queueList, StateChange, "lastOnly", True)
-StateMachine.initialize_shared_state(queueList)
+    stateChangeSubscriber = messageHandlerSubscriber(queueList, StateChange, "lastOnly", True)
+    StateMachine.initialize_shared_state(queueList)
 
-# Initializing gateway
-processGateway = processGateway(queueList, logging)
-processGateway.start()
+    # Initializing gateway
+    processGateway = processGateway(queueList, logging)
+    processGateway.start()
 
-# ===================================== INITIALIZE PROCESSES ==================================
+    # ===================================== INITIALIZE PROCESSES ==================================
 
-# Initializing dashboard
-dashboard_ready = Event()
-processDashboard = processDashboard(queueList, logging, dashboard_ready, debugging = False)
+    # Initializing dashboard
+    dashboard_ready = Event()
+    processDashboard = processDashboard(queueList, logging, dashboard_ready, debugging = False)
 
-# Initializing camera
-camera_ready = Event()
-processCamera = processCamera(queueList, logging, camera_ready, debugging = False)
+    # Initializing camera
+    camera_ready = Event()
+    processCamera = processCamera(queueList, logging, camera_ready, debugging = False)
 
-# Initializing semaphores
-semaphore_ready = Event()
-processSemaphore = processSemaphores(queueList, logging, semaphore_ready, debugging = False)
+    # Initializing semaphores
+    semaphore_ready = Event()
+    processSemaphore = processSemaphores(queueList, logging, semaphore_ready, debugging = False)
 
-# Initializing GPS
-traffic_com_ready = Event()
-processTrafficCom = processTrafficCommunication(queueList, logging, 3, traffic_com_ready, debugging = False)
+    # Initializing GPS
+    traffic_com_ready = Event()
+    processTrafficCom = processTrafficCommunication(queueList, logging, 3, traffic_com_ready, debugging = False)
 
-# Initializing serial connection NUCLEO - > PI
-serial_handler_ready = Event()
-processSerialHandler = processSerialHandler(queueList, logging, serial_handler_ready, dashboard_ready, debugging = False)
+    # Initializing serial connection NUCLEO - > PI
+    serial_handler_ready = Event()
+    processSerialHandler = processSerialHandler(queueList, logging, serial_handler_ready, dashboard_ready, debugging = True)
 
-# Adding all processes to the list
-allProcesses.extend([processCamera, processSemaphore, processTrafficCom, processSerialHandler, processDashboard])
-allEvents.extend([camera_ready, semaphore_ready, traffic_com_ready, serial_handler_ready, dashboard_ready])
+    # Adding all processes to the list
+    allProcesses.extend([processCamera, processSemaphore, processTrafficCom, processSerialHandler, processDashboard])
+    allEvents.extend([camera_ready, semaphore_ready, traffic_com_ready, serial_handler_ready, dashboard_ready])
 
-# ------ New component initialize starts here ------#
+    # ------ New component initialize starts here ------#
 
-# ------ New component initialize ends here ------#
+    # ------ New component initialize ends here ------#
 
-# ===================================== START PROCESSES ==================================
+    # ===================================== START PROCESSES ==================================
 
-for process in allProcesses:
-    process.daemon = True
-    process.start()
+    for process in allProcesses:
+        process.daemon = True
+        process.start()
 
-# ===================================== STAYING ALIVE ====================================
+    # ===================================== STAYING ALIVE ====================================
 
-blocker = Event()
-try:
-    # wait for all events to be set
-    for event in allEvents:
-        event.wait()
+    blocker = Event()
+    try:
+        # wait for all events to be set
+        for event in allEvents:
+            event.wait()
 
-    # apply starting mode
-    StateMachine.initialize_starting_mode()
+        # apply starting mode
+        StateMachine.initialize_starting_mode()
 
-    time.sleep(10)
-    print(BigPrint.C4_BOMB.value)
-    print(BigPrint.PRESS_CTRL_C.value)
+        time.sleep(10)
+        print(BigPrint.C4_BOMB.value)
+        print(BigPrint.PRESS_CTRL_C.value)
 
-    while True:
-        message = stateChangeSubscriber.receive()
-        if message is not None:
-            modeDictSemaphore = SystemMode[message].value["semaphore"]["process"]
-            modeDictTrafficCom = SystemMode[message].value["traffic_com"]["process"]
+        while True:
+            message = stateChangeSubscriber.receive()
+            if message is not None:
+                modeDictSemaphore = SystemMode[message].value["semaphore"]["process"]
+                modeDictTrafficCom = SystemMode[message].value["traffic_com"]["process"]
 
-            processSemaphore = manage_process_life(processSemaphores, processSemaphore, [queueList, logging, semaphore_ready, False], modeDictSemaphore["enabled"], allProcesses)
-            processTrafficCom = manage_process_life(processTrafficCommunication, processTrafficCom, [queueList, logging, 3, traffic_com_ready, False], modeDictTrafficCom["enabled"], allProcesses)
+                processSemaphore = manage_process_life(processSemaphores, processSemaphore, [queueList, logging, semaphore_ready, False], modeDictSemaphore["enabled"], allProcesses)
+                processTrafficCom = manage_process_life(processTrafficCommunication, processTrafficCom, [queueList, logging, 3, traffic_com_ready, False], modeDictTrafficCom["enabled"], allProcesses)
 
-        blocker.wait(0.1)
+            blocker.wait(0.1)
 
-except KeyboardInterrupt:
-    print("\nCatching a KeyboardInterruption exception! Shutdown all processes.\n")
+    except KeyboardInterrupt:
+        print("\nCatching a KeyboardInterruption exception! Shutdown all processes.\n")
 
-    for proc in reversed(allProcesses):
-        proc.stop()
-    processGateway.stop()
+        for proc in reversed(allProcesses):
+            proc.stop()
+        processGateway.stop()
 
-    # wait for all processes to finish before exiting
-    for proc in reversed(allProcesses):
-        shutdown_process(proc)
-    shutdown_process(processGateway)
+        # wait for all processes to finish before exiting
+        for proc in reversed(allProcesses):
+            shutdown_process(proc)
+        shutdown_process(processGateway)

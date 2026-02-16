@@ -1,17 +1,20 @@
+import os
 import subprocess
+import socket
 import re
 
 class IpManager:
     @staticmethod
     def get_ip_address():
-        """Retrieve the current IP address of the machine."""
+        """Get the primary IP address of the machine."""
         try:
-            ip_output = subprocess.check_output("hostname -I", shell=True)
-            ip_address = ip_output.decode('utf-8').strip().split()[0]
-            return ip_address
-        except subprocess.CalledProcessError:
-            print("\033[1;97m[ Dashboard ] :\033[0m \033[1;93mWARNING\033[0m - Could not retrieve IP address.")
-            return None
+            # Connect to an external server (doesn't actually send data) to determine the routing 
+            # and thus the primary IP interface.
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.connect(("8.8.8.8", 80))
+                return s.getsockname()[0]
+        except Exception:
+            return "127.0.0.1"
 
 
     @staticmethod

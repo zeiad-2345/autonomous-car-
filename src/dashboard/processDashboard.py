@@ -76,16 +76,19 @@ class processDashboard(WorkerProcess):
         # state machine
         self.stateMachine = StateMachine.get_instance()
 
+        # Flask and SocketIO init (Deferred to run() for macOS/multiprocessing compatibility)
+        self.app = None
+        self.socketio = None
+        
+        # Hardware metrics
+        self.cpuCoreUsage = 0
+        self.memoryUsage = 0
+        self.cpuTemperature = 0
+
         # message handling
         self.messages = {}
         self.sendMessages = {}
         self.messagesAndVals = {}
-
-        # hardware monitoring
-        self.memoryUsage = 0
-        self.cpuCoreUsage = 0
-        self.cpuTemperature = 0
-
 
         # heartbeat
         self.heartbeat_last_sent = time.time()
@@ -105,18 +108,17 @@ class processDashboard(WorkerProcess):
         # configuration
         self.table_state_file = self._get_table_state_path()
 
-        # setup flask and socketio
-        self.app = Flask(__name__)
-        self.socketio = SocketIO(self.app, cors_allowed_origins="*", async_mode='eventlet')
-        CORS(self.app, supports_credentials=True)
-
-        # calibration
-        self.calibration = Calibration(self.queueList, self.socketio)
+        # calibration (socketio set in run)
+        self.calibration = Calibration(self.queueList, None)
 
         # initialize message handling
         self._initialize_messages()
-        self._setup_websocket_handlers()
-        self._start_background_tasks()
+
+        # We cannot setup websocket handlers here because socketio is None
+        # self._setup_websocket_handlers() # moved to run()
+        
+        # We also cannot start background tasks that depend on socketio being ready or eventlet
+        # self._start_background_tasks() # moved to run()
 
         super(processDashboard, self).__init__(self.queueList, ready_event)
     
@@ -183,10 +185,23 @@ class processDashboard(WorkerProcess):
 
     # ===================================== RUN ==========================================
     def run(self):
-        """Apply the initializing method."""
+        """Run the process."""
         if self.ready_event:
             self.ready_event.set()
 
+        # Initialize Flask and SocketIO here to avoid pickling issues
+        self.app = Flask(__name__)
+        self.app.config['SECRET_KEY'] = 'secret!'
+        self.socketio = SocketIO(self.app, cors_allowed_origins="*", async_mode='eventlet')
+        CORS(self.app, supports_credentials=True)
+        self.calibration.set_socketio(self.socketio) # Set socketio for calibration
+        self._setup_websocket_handlers() # Use existing handler setup
+        self._start_background_tasks() # Start background tasks
+
+        # Update IP
+        IpManager.replace_ip_in_file()
+
+        # Start the server
         self.socketio.run(self.app, host='0.0.0.0', port=5005)
 
 
@@ -338,7 +353,14 @@ class processDashboard(WorkerProcess):
         """Monitor and update hardware metrics periodically."""
         self.cpuCoreUsage = psutil.cpu_percent(interval=None, percpu=False)
         self.memoryUsage = psutil.virtual_memory().percent
-        self.cpuTemperature = round(psutil.sensors_temperatures()['cpu_thermal'][0].current)
+        try:
+            temps = psutil.sensors_temperatures()
+            if 'cpu_thermal' in temps:
+                self.cpuTemperature = round(temps['cpu_thermal'][0].current)
+            else:
+                self.cpuTemperature = 0
+        except (AttributeError, NotImplementedError):
+            self.cpuTemperature = 0
 
         eventlet.spawn_after(1, self.update_hardware_data)
 

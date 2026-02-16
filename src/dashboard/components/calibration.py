@@ -119,10 +119,14 @@ class Calibration():
         self.backward_completed = False
 
 
-    def handle_calibration_signal(self, dataDict, socketId):
+    def set_socketio(self, socketio):
+        """Set the socketio instance."""
+        self.socketio = socketio
+
+    def handle_calibration_signal(self, data, socketId):
         """Handle calibration signals from frontend."""
         
-        action = dataDict['Action']
+        action = data['Action']
 
         if action == 'start':
             self.start_calibration_process()
