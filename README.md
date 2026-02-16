@@ -6,6 +6,19 @@ The project contains all the provided code for the RPi, more precisely:
 - API's for communicating with the environmental servers at Bosch location;
 - Simulated servers for the API's.
 
+## 🕹️ Remote Control Support (New)
+
+The Brain now includes a dedicated process (`processDashboard`) that listens for SocketIO commands from `raven-computer` and forwards them to the embedded controller.
+
+- **Port**: 5005 (SocketIO)
+- **Commands**: `SpeedMotor`, `SteerMotor`, `Klem` (System State)
+- **Feedback**: Publishes Battery and IMU data back to the Dashboard.
+
+### macOS Compatibility
+The stack has been patched to support macOS environments:
+- **Multiprocessing**: Fixed `spawn` start method issues.
+- **Serial**: Added fallback detection for Arduino devices.
+- **Networking**: `ip_manager` adapted for macOS `ifconfig`.
 
 ## The documentation is available in more details here:
 [Documentation](https://bosch-future-mobility-challenge-documentation.readthedocs-hosted.com/)
