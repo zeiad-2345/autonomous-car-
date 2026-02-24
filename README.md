@@ -20,6 +20,23 @@ The stack has been patched to support macOS environments:
 - **Serial**: Added fallback detection for Arduino devices.
 - **Networking**: `ip_manager` adapted for macOS `ifconfig`.
 
+## 🔌 Serial Communication (Arduino RP2040)
+The Brain communicates with the low-level Arduino embedded controller using a custom asynchronous serial protocol via USB.
+
+- **Script:** `src/serial_controller.py`
+- **Protocol:** `#key:value;;` (Commands) / `@key:value;;\r\n` (Telemetry)
+- **Features:** 
+    - Background Daemon thread continuously parses `@imu` and `@encoder` data.
+    - Non-blocking main thread accepts user keyboard input to send `#speed` and `#steer` commands instantly.
+
+### Running the Controller
+```bash
+python3 src/serial_controller.py
+```
+*(Note: Change `SERIAL_PORT` inside the script if running directly from a Mac instead of the Pi).*
+
+---
+
 ## The documentation is available in more details here:
 [Documentation](https://bosch-future-mobility-challenge-documentation.readthedocs-hosted.com/)
 
