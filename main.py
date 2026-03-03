@@ -74,8 +74,7 @@ from src.statemachine.stateMachine import StateMachine
 from src.statemachine.systemMode import SystemMode
 
 # ------ New component imports starts here ------#
-
-
+from src.perception.sign_recognition.processSignDetection import processSignDetection
 # ------ New component imports ends here ------#
 
 # ===================================== SHUTDOWN PROCESS ====================================
@@ -167,7 +166,10 @@ if __name__ == "__main__":
     allEvents.extend([camera_ready, semaphore_ready, traffic_com_ready, serial_handler_ready, dashboard_ready])
 
     # ------ New component initialize starts here ------#
-
+    sign_detection_ready = Event()
+    processSignDetection = processSignDetection(queueList, logging, sign_detection_ready, debugging=True)
+    allProcesses.insert(0, processSignDetection)
+    allEvents.insert(0, sign_detection_ready)
     # ------ New component initialize ends here ------#
 
     # ===================================== START PROCESSES ==================================

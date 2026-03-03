@@ -302,3 +302,11 @@ class StateChange(Enum):
     msgType = "str"
 
 ### It will have this format: {"WarningName":"name1", "WarningID": 1}
+
+################################# From SignDetection ##################################
+class SignDetected(Enum):
+    Queue = "General"
+    Owner = "threadSignDetection"
+    msgID = 1
+    msgType = "str"  # JSON: {"sign": "stop", "confidence": 0.95, "bbox": [x1,y1,x2,y2]}
+
