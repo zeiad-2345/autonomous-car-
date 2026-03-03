@@ -7,6 +7,7 @@ eventlet>=0.36.1
 Twisted>=24.7.0
 cryptography>=43,<45
 opencv-python          # if wheel fails, use: sudo apt-get install -y python3-opencv
+ultralytics>=8.0       # YOLOv8 for sign detection
 pyserial==3.5
 scipy>=1.15,<2
 pytest
