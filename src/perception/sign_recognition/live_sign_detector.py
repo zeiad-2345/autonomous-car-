@@ -93,6 +93,19 @@ LABEL_MAP = {
     "noentry":              "no_entry",
     "do_not_enter":         "no_entry",
     "no_enter":             "no_entry",
+
+    # ── Custom GTSRB Numbers ──
+    "12": "priority",
+    "14": "stop",
+    "27": "crosswalk",
+    "38": "highway_entrance", # keeping right
+    "39": "highway_entrance", # keeping left
+    "17": "no_entry", # horizontal bar
+    "15": "no_entry", # blank circle
+    "40": "roundabout",
+    "35": "one_way",  # ahead only
+    "33": "one_way",  # turn right ahead
+    "13": "priority", # yield
 }
 
 
