@@ -128,8 +128,7 @@ class threadSignDetection(ThreadWithStop):
         except Exception as e:
             self.logging.error(f"❌ Failed to load YOLO model: {e}")
             self.model = None
-
-    def thread_work(self):
+∫∫
         """Main work loop — receive camera frame, run inference, publish results."""
         if self.model is None:
             time.sleep(1)
