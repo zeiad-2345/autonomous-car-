@@ -107,13 +107,37 @@ class threadSignDetection(ThreadWithStop):
             return
 
         import os
-        # Check for custom model in common locations
+        # ── Model File Lookup (Priority Order) ──────────────────────────
+        # The detector tries each path in order and uses the first one found.
+        #
+        # Model files explained:
+        #   bfmc_best_shirts.pt  — RECOMMENDED. Fine-tuned from bfmc_best.pt
+        #                          with 10 extra epochs of negative mining
+        #                          (39 red shirt images as backgrounds).
+        #                          Reduces false positives on red clothing.
+        #                          Dataset: 600 images (561 signs + 39 shirts).
+        #                          Final mAP50: 0.933, mAP50-95: 0.843.
+        #
+        #   bfmc_best.pt         — Base production model. 100 epochs trained
+        #                          on Bosch Traffic Signs dataset (561 images,
+        #                          9 classes). mAP50: 0.927, mAP50-95: 0.837.
+        #                          Source: runs/detect/bfmc_models/sign_detector/
+        #
+        #   bfmc_last_shirts.pt  — Last checkpoint from the shirt fine-tuning
+        #                          run (epoch 10/10). Use for resuming training.
+        #
+        #   last.pt              — Last checkpoint from the original 100-epoch
+        #                          training run. Use for resuming training.
+        #
+        #   yolov8n.pt (fallback) — Ultralytics COCO pretrained (80 classes).
+        #                           Only detects "stop sign" from the 9 BFMC signs.
+        # ─────────────────────────────────────────────────────────────────
         custom_paths = [
-            "src/perception/sign_recognition/bfmc_best.pt",
-            "models/sign_detector_best.pt",
-            "models/best.pt",
-            # "src/perception/sign_recognition/best.pt",
-            "src/perception/sign_recognition/last.pt",
+            "src/perception/sign_recognition/bfmc_best_shirts.pt",  # Best + negative mining
+            "src/perception/sign_recognition/bfmc_best.pt",         # Base 100-epoch model
+            "models/sign_detector_best.pt",                          # Legacy path
+            "models/best.pt",                                        # Legacy path
+            "src/perception/sign_recognition/last.pt",               # Last checkpoint
         ]
         for path in custom_paths:
             if os.path.exists(path):

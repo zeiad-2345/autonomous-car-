@@ -37,6 +37,45 @@ python3 src/serial_controller.py
 
 ---
 
+## 🧠 Sign Detection AI (Task 008b)
+
+YOLOv8-based real-time traffic sign detection trained specifically for the 9 BFMC miniature signs. Runs on both the Raspberry Pi 4 and Mac (MPS accelerated).
+
+### Detected Signs
+Stop · Parking · Priority · Crosswalk · Highway Entrance · Highway Exit · Roundabout · One-way · No-entry
+
+### Model Files (`src/perception/sign_recognition/`)
+
+| File | Description | Accuracy |
+|------|-------------|----------|
+| `bfmc_best_shirts.pt` | ⭐ **RECOMMENDED.** Fine-tuned with negative mining (red shirt rejection). | mAP50: 93.3% |
+| `bfmc_best.pt` | Base model. 100 epochs on Bosch dataset (561 images). | mAP50: 92.7% |
+| `bfmc_last_shirts.pt` | Last checkpoint from shirt fine-tuning (for resuming). | — |
+| `last.pt` | Last checkpoint from base training (for resuming). | — |
+
+### Training History
+
+| Run | Script | Epochs | Dataset | Output |
+|-----|--------|--------|---------|--------|
+| **Run 1** (Base) | `train_signs.py` | 100 | 561 images, 9 classes | `sign_detector/` |
+| **Run 3** (Shirts) | `finetune_shirts.py` | +10 fine-tune | 600 images (561 signs + 39 shirt backgrounds) | `sign_detector_shirts/` |
+
+Run 3 uses **negative mining**: red shirt images with empty label files teach the model "no sign here," reducing false positives on red clothing.
+
+### Quick Usage
+
+```bash
+# Live detection with webcam (Mac)
+python3 src/perception/sign_recognition/live_sign_detector.py --model src/perception/sign_recognition/bfmc_best_shirts.pt --webcam
+
+# Live detection with Pi Camera (Raspberry Pi)
+python3 src/perception/sign_recognition/live_sign_detector.py --model src/perception/sign_recognition/bfmc_best_shirts.pt
+```
+
+> Full details: [`src/perception/sign_recognition/README.md`](src/perception/sign_recognition/README.md)
+
+---
+
 ## The documentation is available in more details here:
 [Documentation](https://bosch-future-mobility-challenge-documentation.readthedocs-hosted.com/)
 
