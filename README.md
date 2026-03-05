@@ -72,6 +72,14 @@ python3 src/perception/sign_recognition/live_sign_detector.py --model src/percep
 python3 src/perception/sign_recognition/live_sign_detector.py --model src/perception/sign_recognition/bfmc_best_shirts.pt
 ```
 
+### Post-Detection Filters (Salma's Suggestion)
+After YOLO detects a sign, a filter pipeline validates it using:
+- **Shape Filter:** Checks bounding box aspect ratio (signs ≈ square, cars ≈ wide+flat)
+- **Color Filter:** Verifies dominant HSV hue matches expected sign color (lighting-independent)
+- **Size Filter:** Rejects tiny noise and frame-filling false positives
+
+Filters are enabled by default. Disable with `--no-filters` for debugging.
+
 > Full details: [`src/perception/sign_recognition/README.md`](src/perception/sign_recognition/README.md)
 
 ---

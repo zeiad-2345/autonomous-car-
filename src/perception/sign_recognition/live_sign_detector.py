@@ -39,6 +39,19 @@ except ImportError:
     print("❌ ultralytics not installed. Run: pip install ultralytics")
     sys.exit(1)
 
+try:
+    from sign_filters import validate_detection
+    FILTERS_AVAILABLE = True
+except ImportError:
+    try:
+        from src.perception.sign_recognition.sign_filters import validate_detection
+        FILTERS_AVAILABLE = True
+    except ImportError:
+        FILTERS_AVAILABLE = False
+
+# Global flag — toggled by --no-filters CLI arg
+USE_FILTERS = True
+
 
 # ─── BFMC Target Signs ────────────────────────────────────────────────────────
 # Color is BGR for OpenCV
@@ -255,7 +268,7 @@ def run(args):
         if img is not None:
             # Single image mode
             results = model(img, conf=args.conf, verbose=False)
-            detections = _extract_detections(results, model, model_path)
+            detections = _extract_detections(results, model, model_path, img)
             annotated = draw_detections(img.copy(), detections)
             annotated = draw_hud(annotated, 0, model_name, len(detections))
 
@@ -302,7 +315,7 @@ def run(args):
 
                 # Inference
                 results = model(frame, conf=args.conf, verbose=False)
-                detections = _extract_detections(results, model, model_path)
+                detections = _extract_detections(results, model, model_path, frame)
 
                 # Draw
                 annotated = draw_detections(frame, detections)
@@ -351,8 +364,12 @@ def run(args):
     print("  👋 Detection stopped.\n")
 
 
-def _extract_detections(results, model, model_path):
-    """Extract and map detections from YOLO results."""
+def _extract_detections(results, model, model_path, frame=None):
+    """Extract and map detections from YOLO results.
+    
+    If USE_FILTERS is True and a frame is provided, each detection is
+    validated against shape, color, and size filters before being accepted.
+    """
     detections = []
     for r in results:
         for box in r.boxes:
@@ -365,6 +382,14 @@ def _extract_detections(results, model, model_path):
                 continue
 
             x1, y1, x2, y2 = map(int, box.xyxy[0])
+
+            # ── Post-Detection Filters ──
+            # Validate shape, color, and size to reject false positives
+            # (e.g., red shirts, blue cars, tiny noise detections).
+            if (USE_FILTERS and FILTERS_AVAILABLE and frame is not None
+                    and is_bfmc):
+                if not validate_detection(frame, mapped, (x1, y1, x2, y2)):
+                    continue  # Rejected by filters
 
             display = BFMC_SIGNS[mapped]["label"] if is_bfmc else mapped.upper()
 
@@ -391,6 +416,7 @@ Examples:
   python3 live_sign_detector.py --model best.pt     # Custom trained model
   python3 live_sign_detector.py --source test.jpg   # Single image test
   python3 live_sign_detector.py --conf 0.3          # Lower confidence threshold
+  python3 live_sign_detector.py --no-filters         # Disable post-detection filters
         """
     )
     parser.add_argument("--model", type=str, default=None,
@@ -401,6 +427,12 @@ Examples:
                         help="Path to video file or image for offline testing")
     parser.add_argument("--conf", type=float, default=0.5,
                         help="Detection confidence threshold (default: 0.5)")
+    parser.add_argument("--no-filters", action="store_true",
+                        help="Disable post-detection shape/color/size filters")
     args = parser.parse_args()
+
+    if args.no_filters:
+        USE_FILTERS = False
+        print("⚠️  Post-detection filters DISABLED (raw YOLO output)")
 
     run(args)

@@ -15,6 +15,12 @@ try:
 except ImportError:
     YOLO = None
 
+try:
+    from src.perception.sign_recognition.sign_filters import validate_detection
+    FILTERS_AVAILABLE = True
+except ImportError:
+    FILTERS_AVAILABLE = False
+
 
 # ─── Label mapping: model output → BFMC sign name ────────────────────────────
 LABEL_MAP = {
@@ -210,6 +216,17 @@ class threadSignDetection(ThreadWithStop):
                     continue
 
                 x1, y1, x2, y2 = map(int, box.xyxy[0])
+
+                # ── Post-Detection Filters ──
+                # Validate shape, color, and size to reject false positives
+                # (e.g., red shirts, blue cars, tiny noise detections).
+                if FILTERS_AVAILABLE:
+                    if not validate_detection(frame, bfmc_sign, (x1, y1, x2, y2)):
+                        if self.debugging:
+                            self.logging.info(
+                                f"  ❌ FILTERED: {bfmc_sign} ({conf:.0%}) "
+                                f"at [{x1},{y1},{x2},{y2}]")
+                        continue  # Rejected by filters
 
                 detection = {
                     "sign": bfmc_sign,

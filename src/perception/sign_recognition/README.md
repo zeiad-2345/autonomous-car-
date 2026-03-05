@@ -150,6 +150,45 @@ python finetune_shirts.py
 
 ---
 
+## 🛡️ Post-Detection Filters
+
+After YOLO detects a potential sign, a filter pipeline validates each detection to reject false positives (e.g., red shirts → stop sign, blue cars → one-way sign).
+
+```
+YOLO Detection → Shape Check → Color Check → Size Check → ✅ Accept
+                     ↓              ↓             ↓
+                  ❌ reject       ❌ reject     ❌ reject
+```
+
+### Filter 1: Shape (Aspect Ratio)
+Signs are roughly square (H/W ≈ 1.0). Cars are wide+flat (H/W ≈ 0.3). Detections with wrong shape are rejected.
+
+### Filter 2: Color (HSV Hue)
+Uses **HSV color space** (not RGB/hex) so lighting changes don't matter. Only checks the Hue channel:
+- **Red** signs (Stop, No Entry): Hue 0–10° or 170–180°
+- **Blue** signs (Parking, Crosswalk, Roundabout, One-way): Hue 100–130°
+- **Yellow** signs (Priority): Hue 15–40°
+- **Green/Blue** signs (Highway): Hue 80–130°
+
+Threshold is generous: only rejects if <3% of pixels match (handles shadows, overexposure).
+
+### Filter 3: Size (Pixel Area)
+Rejects tiny noise (<200 px²) and huge false positives (>40% of frame).
+
+### Disabling Filters
+```bash
+python3 live_sign_detector.py --no-filters   # Raw YOLO output, no validation
+```
+
+### Tuning Thresholds
+Edit `sign_filters.py` → `SIGN_FILTERS` dict. Each sign has configurable:
+- `aspect_ratio` / `aspect_tol` — expected shape ± tolerance
+- `hsv_ranges` — list of HSV color ranges
+- `color_min` — minimum fraction of matching pixels
+- `min_area_px` / `max_area_frac` — size bounds
+
+---
+
 ## CLI Options
 
 ```
@@ -157,6 +196,7 @@ python finetune_shirts.py
 --webcam        Force webcam instead of Pi Camera
 --source PATH   Video file or image path for offline testing
 --conf FLOAT    Confidence threshold, 0.0–1.0 (default: 0.5)
+--no-filters    Disable post-detection shape/color/size filters
 ```
 
 ## Examples
@@ -185,6 +225,7 @@ src/perception/sign_recognition/
 ├── bfmc_best.pt             Base production model (100 epochs, no shirts)
 ├── bfmc_last_shirts.pt      Last checkpoint from shirt fine-tuning
 ├── last.pt                  Last checkpoint from base training
+├── sign_filters.py          Post-detection filter pipeline (shape/color/size)
 ├── live_sign_detector.py    Standalone live detector (webcam/Pi Camera)
 ├── sign_detector.py         Original ROS-based detector class
 ├── threads/
