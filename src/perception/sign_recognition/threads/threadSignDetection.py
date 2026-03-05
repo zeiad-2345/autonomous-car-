@@ -109,9 +109,11 @@ class threadSignDetection(ThreadWithStop):
         import os
         # Check for custom model in common locations
         custom_paths = [
+            "src/perception/sign_recognition/bfmc_best.pt",
             "models/sign_detector_best.pt",
             "models/best.pt",
-            "src/perception/sign_recognition/best.pt",
+            # "src/perception/sign_recognition/best.pt",
+            "src/perception/sign_recognition/last.pt",
         ]
         for path in custom_paths:
             if os.path.exists(path):
