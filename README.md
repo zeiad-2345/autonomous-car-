@@ -6,6 +6,40 @@ The project contains all the provided code for the RPi, more precisely:
 - API's for communicating with the environmental servers at Bosch location;
 - Simulated servers for the API's.
 
+## 🏗️ RAVEN/Skynet Architecture (ROS 1 vs Native Python)
+
+The `raven-brain-stack` utilizes a hybrid architectural approach. The core driving logic operates on a lightweight, high-speed custom **Python `multiprocessing.Queue`** framework, while specific isolated perception nodes leverage **ROS 1 Noetic**.
+
+```mermaid
+graph TD
+    subgraph ROS 1 Noetic Environment
+        G[Gazebo / Real Camera] -- /camera/rgb/image_raw --> LS[lane_segmentation.py]
+        LS -- /raven/perception/lane_mask --> TF[Task: Lateral Offset]
+        
+        note1[Used purely for specific isolated<br>perception tasks requiring ROS tools]
+    end
+
+    subgraph Native Python Multiprocessing Environment
+        C[threadCamera.py] -- Camera Queue --> SD[threadSignDetection.py]
+        SD -- SignDetected Queue --> P[threadPlanner.py]
+        P -- SpeedMotor/SteerMotor Queue --> SW[threadWrite.py]
+        SR[threadRead.py] -- ImuData Queue --> P
+        
+        note2[The core Skynet brain.<br>High speed, low overhead, purely native Python (ZeroMQ-style).]
+    end
+
+    SW -- Serial USB --> MCU[Arduino RP2040 / Nucleo]
+    MCU -- Serial USB --> SR
+
+    classDef ros fill:#22314E,stroke:#4E70A6,color:#fff
+    classDef zmq fill:#1A4024,stroke:#3D9955,color:#fff
+    classDef hw fill:#5A3612,stroke:#B46D24,color:#fff
+    
+    class G,LS,TF,note1 ros
+    class C,SD,P,SW,SR,note2 zmq
+    class MCU hw
+```
+
 ## 🕹️ Remote Control Support (New)
 
 The Brain now includes a dedicated process (`processDashboard`) that listens for SocketIO commands from `raven-computer` and forwards them to the embedded controller.
@@ -154,9 +188,133 @@ Located in `calibration/`:
         python3 calibration/verify_ipm.py <path_to_test_image>
         ```
 
-### Calibration Artifacts
-The tools generate `calibration/data/calib_data.json` containing:
 - `camera_matrix`: Intrinsic parameters
 - `dist_coeffs`: Distortion coefficients
 - `homography_matrix`: The IPM transformation matrix
 
+---
+
+## 🚀 Skynet — Step-by-Step Deployment Guide
+
+### What Was Built
+
+Three fully-working standalone scripts have been integrated into one coherent system.
+
+| Script | Role | Status |
+| --- | --- | --- |
+| `src/serial_controller.py` | `SerialController` class + standalone keyboard control | ✅ Refactored |
+| `src/skynet.py` | **Master integration** — 3 threads, all wired up | ✅ NEW |
+| `services/rpi-wifi-fallback/frame_receiver_server.py` | Laptop video window | ✅ Updated to push-mode |
+| `src/perception/sign_recognition/live_sign_detector.py` | Standalone YOLO demo | ✅ Unchanged |
+| `src/perception/sign_recognition/sign_filters.py` | Detection filters | ✅ Unchanged |
+
+### Architecture at a Glance
+
+```
+Pi                                          Mac (SSH)
+─────────────────────────────────           ───────────────────────
+src/skynet.py                               frame_receiver_server.py
+  ├── PerceptionThread                      (port 5012)
+  │     Camera → YOLO + filters              ↑ annotated frames (TCP)
+  │     → publishes sign label
+  │                                         SSH Terminal:
+  ├── PlannerThread                          @imu, @encoder printed live
+  │     sign → SIGN_RULES table
+  │     → publishes speed/steer
+  │
+  └── SerialThread ──USB──► Arduino RP2040
+        #speed / #steer →
+        ← @imu / @encoder
+```
+
+### Step 1: Hardware Setup
+1. Connect the **Arduino RP2040** to the Pi via USB (`/dev/ttyACM0`).
+2. Connect the **Pi Camera** ribbon cable to the CSI port.
+3. Make sure Pi and Mac are on the **same network** (lab WiFi or Pi hotspot).
+
+### Step 2: Install Dependencies (one time, on Pi)
+
+```bash
+pip install ultralytics opencv-python pyserial picamera2
+```
+
+On Mac (for the video viewer):
+```bash
+pip install opencv-python
+```
+
+### Step 3: Run on the Mac first (opens the video window)
+
+```bash
+python3 services/rpi-wifi-fallback/frame_receiver_server.py --display
+```
+
+The window will block until the Pi connects.
+
+### Step 4: Run skynet.py on the Pi (via SSH)
+
+```bash
+ssh captive@<PI_IP>
+cd ~/raven-brain-stack
+python3 src/skynet.py --laptop-ip <YOUR_MAC_IP>
+```
+
+**Common flags:**
+```bash
+python3 src/skynet.py --no-stream      # Skip video streaming
+python3 src/skynet.py --no-arduino     # Bench-test without Arduino
+python3 src/skynet.py --conf 0.35      # Lower YOLO confidence
+python3 src/skynet.py --no-filters     # Disable post-detection filters
+```
+
+### Step 5: What you will see
+
+**Mac OpenCV window:** live camera feed, colored bounding boxes, labels like `STOP 94%`.
+
+**SSH terminal:**
+```
+[Perception] ✅ Pi Camera initialized
+[Perception] ✅ YOLO model loaded: src/perception/sign_recognition/bfmc_best_shirts.pt
+[Serial]     ✅ Connected to Arduino on /dev/ttyACM0
+[Planner]    🚦 STOP                → speed=  0  steer=  0
+[IMU] roll=2.1 pitch=-0.4 yaw=89.2
+[Planner]    ⏱  Stop duration elapsed → resuming cruise
+```
+
+### Step 6: Standalone scripts still work
+
+```bash
+# Mac webcam YOLO test
+python3 src/perception/sign_recognition/live_sign_detector.py --webcam
+
+# Manual Arduino keyboard control
+python3 src/serial_controller.py
+
+# Mac video viewer only
+python3 services/rpi-wifi-fallback/frame_receiver_server.py --display
+```
+
+### Sign Reaction Rules
+
+Edit `SIGN_RULES` at the top of `src/skynet.py`:
+
+```python
+SIGN_RULES = {
+    "stop":             {"speed": 0,   "steer": 0, "duration_s": 3},   # Stop 3 seconds
+    "highway_entrance": {"speed": 30,  "steer": 0, "duration_s": 0},   # Speed up
+    "highway_exit":     {"speed": 12,  "steer": 0, "duration_s": 0},   # Slow down
+    "crosswalk":        {"speed": 10,  "steer": 0, "duration_s": 0},   # Crawl
+    ...
+}
+DEFAULT_SPEED = 15  # Cruise speed between signs
+```
+
+### Troubleshooting
+
+| Problem | Fix |
+| --- | --- |
+| `[Serial] ❌ Failed to open /dev/ttyACM0` | Check USB cable, try `ls /dev/ttyACM*` |
+| Video window doesn't open | Start `frame_receiver_server.py` on Mac **before** `skynet.py` on Pi |
+| YOLO too slow | Lower confidence: `--conf 0.3`, or `--no-filters` |
+| Wrong laptop IP | Run `ip a` on Mac to find IP, pass with `--laptop-ip` |
+| `picamera2` not found | `pip install picamera2`, or use `--webcam-index 0` |

@@ -62,22 +62,26 @@ LABEL_MAP = {
 }
 
 
+import socket
+import struct
+
 class threadSignDetection(ThreadWithStop):
     """Thread that continuously reads camera frames and runs YOLOv8 sign detection.
 
     Subscribes to the mainCamera message to get frames.
     Publishes SignDetected messages with the detected sign name and confidence.
-
-    Args:
-        queueList: Dictionary of multiprocessing queues.
-        logging: Logger instance.
-        debugging: Enable debug output.
+    Streams annotated frames to the Dashboard via a TCP Socket.
     """
 
     def __init__(self, queueList, logging, debugging=False):
         self.queuesList = queueList
         self.logging = logging
         self.debugging = debugging
+
+        # TCP Video Streaming Setup
+        self.laptop_ip = '10.105.27.45'  # Default, should match Dashboard IP
+        self.stream_socket = None
+        self._init_video_stream()
 
         # Load model
         self.model = None
@@ -102,6 +106,22 @@ class threadSignDetection(ThreadWithStop):
         )
 
         super(threadSignDetection, self).__init__()
+
+    def _init_video_stream(self):
+        """Initializes a TCP connection to send annotated frames to the laptop."""
+        try:
+            self.stream_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            # Short timeout to avoid blocking the thread if the laptop isn't listening yet
+            self.stream_socket.settimeout(0.5) 
+            self.stream_socket.connect((self.laptop_ip, 5012))
+            
+            # Reset timeout so the recv('F') loop doesn't instantly die, but keep it low
+            # so we drop frames instead of lagging the car if the network stutters.
+            self.stream_socket.settimeout(0.2) 
+            self.logging.info(f"✅ Video Stream: Connected to Laptop {self.laptop_ip}:5012")
+        except Exception as e:
+            self.logging.warning(f"Video Stream: Client not found on {self.laptop_ip}:5012 ({e}). Annotations will not be streamed.")
+            self.stream_socket = None
 
     def _load_model(self):
         """Load the YOLO model. Tries custom model first, falls back to COCO."""
@@ -160,8 +180,8 @@ class threadSignDetection(ThreadWithStop):
         except Exception as e:
             self.logging.error(f"❌ Failed to load YOLO model: {e}")
             self.model = None
-∫∫
-        """Main work loop — receive camera frame, run inference, publish results."""
+
+    def thread_work(self):
         if self.model is None:
             time.sleep(1)
             return
@@ -237,8 +257,37 @@ class threadSignDetection(ThreadWithStop):
                 # Publish to the message bus
                 self.signPublisher.send(json.dumps(detection))
 
+                # DRAW BOX!
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                cv2.putText(frame, bfmc_sign, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
+
                 if self.debugging:
                     self.logging.info(
                         f"🔍 Sign: {bfmc_sign} ({conf:.0%}) "
                         f"at [{x1},{y1},{x2},{y2}]"
                     )
+
+        # ── Stream Annotated Frame to Dashboard ──
+        if self.stream_socket:
+            try:
+                # The laptop sends 'F' to request a frame
+                req = self.stream_socket.recv(1)  
+                if req == b'F':
+                    # Resize to save WiFi bandwidth (Server expects 640x480)
+                    frame_resized = cv2.resize(frame, (640, 480))
+                    _, img_encoded = cv2.imencode('.jpg', frame_resized)
+                    img_bytes = img_encoded.tobytes()
+                    size = len(img_bytes)
+                    
+                    # Send 8-byte size header, then image data
+                    self.stream_socket.sendall(size.to_bytes(8, byteorder='big'))
+                    self.stream_socket.sendall(img_bytes)
+                    
+                    # Receive confirmation
+                    status = self.stream_socket.recv(1024) 
+            except socket.timeout:
+                pass # Server didn't request a frame in time, just continue without blocking YOLO
+            except Exception as e:
+                self.logging.warning(f"Video Stream broken: {e}")
+                self.stream_socket.close()
+                self.stream_socket = None # Stop trying to stream until restart

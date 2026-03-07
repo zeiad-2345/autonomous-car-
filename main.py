@@ -75,6 +75,7 @@ from src.statemachine.systemMode import SystemMode
 
 # ------ New component imports starts here ------#
 from src.perception.sign_recognition.processSignDetection import processSignDetection
+from src.perception.planner.processPlanner import processPlanner
 # ------ New component imports ends here ------#
 
 # ===================================== SHUTDOWN PROCESS ====================================
@@ -168,8 +169,15 @@ if __name__ == "__main__":
     # ------ New component initialize starts here ------#
     sign_detection_ready = Event()
     processSignDetection = processSignDetection(queueList, logging, sign_detection_ready, debugging=True)
+    
+    planner_ready = Event()
+    processPlanner = processPlanner(queueList, logging, planner_ready, debugging=True)
+    
     allProcesses.insert(0, processSignDetection)
+    allProcesses.insert(1, processPlanner)
+    
     allEvents.insert(0, sign_detection_ready)
+    allEvents.insert(1, planner_ready)
     # ------ New component initialize ends here ------#
 
     # ===================================== START PROCESSES ==================================
