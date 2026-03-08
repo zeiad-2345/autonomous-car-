@@ -1,1 +1,50 @@
-[]
+[
+    {
+        "id": "stop_0",
+        "type": "stop",
+        "x_cm": -71.94,
+        "y_cm": -87.77
+    },
+    {
+        "id": "parking_1",
+        "type": "parking",
+        "x_cm": -149.7,
+        "y_cm": -196.64
+    },
+    {
+        "id": "roundabout_2",
+        "type": "roundabout",
+        "x_cm": -166.09,
+        "y_cm": -148.04
+    },
+    {
+        "id": "highway_entrance_3",
+        "type": "highway_entrance",
+        "x_cm": -224.42,
+        "y_cm": 161.92
+    },
+    {
+        "id": "highway_exit_4",
+        "type": "highway_exit",
+        "x_cm": -291.35,
+        "y_cm": -111.37
+    },
+    {
+        "id": "priority_5",
+        "type": "priority",
+        "x_cm": -19.72,
+        "y_cm": 34.44
+    },
+    {
+        "id": "no_entry_6",
+        "type": "no_entry",
+        "x_cm": -213.03,
+        "y_cm": -135.82
+    },
+    {
+        "id": "one_way_7",
+        "type": "one_way",
+        "x_cm": -20.0,
+        "y_cm": -156.09
+    }
+]

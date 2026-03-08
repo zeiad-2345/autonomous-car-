@@ -61,8 +61,8 @@ class MapBuilder:
             desc = "Click exactly where the car starts. This will be coordinate X=0, Y=0."
         else:
             title = f"STEP 4: PLACE WAYPOINTS | Selected: {self.current_type or 'NONE (Press a key first)'}"
-            desc = "Keys: 'c' Crosswalk | 's' Stop | 'r' Roundabout | 'p' Parking | 'h' Highway | 'y' Priority"
-            desc2 = "Action: Press key, then click exactly where the sign is located."
+            desc = "Keys: 'c' Crosswalk | 's' Stop | 'r' Roundabout | 'p' Parking | 'h' HighwayIn | 'x' HighwayOut"
+            desc2 = "Keys: 'y' Priority | 'n' No Entry | 'o' One Way | Action: Press key, then click map."
             cv2.putText(tmp, desc2, (20,105), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,100), 2)
             cv2.putText(tmp, "Press 'q' when finished to Save & Exit", (20,135), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,0,255), 2)
 
@@ -100,6 +100,8 @@ class MapBuilder:
             elif k == ord('h'): self.current_type = "highway_entrance"
             elif k == ord('x'): self.current_type = "highway_exit"
             elif k == ord('y'): self.current_type = "priority"
+            elif k == ord('n'): self.current_type = "no_entry"
+            elif k == ord('o'): self.current_type = "one_way"
             elif k == ord('z') and self.waypoints: self.waypoints.pop(); print("Last waypoint removed.")
 
         with open("map_waypoints.json", "w") as f:
