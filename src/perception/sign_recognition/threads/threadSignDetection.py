@@ -1,6 +1,7 @@
 import time
 import json
 import base64
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -21,139 +22,107 @@ try:
 except ImportError:
     FILTERS_AVAILABLE = False
 
+TRAFFIC_LIGHT_LABELS = {"green", "red", "yellow", "redandyellow"}
 
-# ─── Label mapping: model output → BFMC sign name ────────────────────────────
+
 LABEL_MAP = {
-    # COCO
-    "green":          "green",
-    "red":            "red",
-    "yellow":         "yellow",
-    "redandyellow":   "redandyellow",
-    "red_yellow":     "redandyellow",
-    "red-yellow":     "redandyellow",
+    # Traffic lights
+    "green": "green",
+    "red": "red",
+    "yellow": "yellow",
+    "redandyellow": "redandyellow",
+    "red_yellow": "redandyellow",
+    "red-yellow": "redandyellow",
     "red and yellow": "redandyellow",
-    "stop sign":            "stop",
-    # Roboflow / GTSDB / custom models
-    "stop":                 "stop",
-    "parking":              "parking",
-    "parking_sign":         "parking",
-    "p":                    "parking",
-    "priority":             "priority",
-    "priority_road":        "priority",
-    "priority road":        "priority",
-    "give_way":             "priority",
-    "crosswalk":            "crosswalk",
-    "pedestrian":           "crosswalk",
-    "pedestrian_crossing":  "crosswalk",
-    "pedestriancrossing":   "crosswalk",
-    "highway":              "highway_entrance",
-    "highway_entrance":     "highway_entrance",
-    "motorway":             "highway_entrance",
-    "motorway_begin":       "highway_entrance",
-    "highway_exit":         "highway_exit",
-    "motorway_end":         "highway_exit",
-    "end_motorway":         "highway_exit",
-    "end motorway":         "highway_exit",
-    "roundabout":           "roundabout",
-    "roundabout_sign":      "roundabout",
-    "one_way":              "one_way",
-    "one-way":              "one_way",
-    "oneway":               "one_way",
-    "one way":              "one_way",
-    "no_entry":             "no_entry",
-    "no-entry":             "no_entry",
-    "no entry":             "no_entry",
-    "noentry":              "no_entry",
-    "do_not_enter":         "no_entry",
-    "no_enter":             "no_entry",
+    # Traffic signs
+    "stop sign": "stop",
+    "stop": "stop",
+    "parking": "parking",
+    "parking_sign": "parking",
+    "p": "parking",
+    "priority": "priority",
+    "priority_road": "priority",
+    "priority road": "priority",
+    "give_way": "priority",
+    "crosswalk": "crosswalk",
+    "pedestrian": "crosswalk",
+    "pedestrian_crossing": "crosswalk",
+    "pedestriancrossing": "crosswalk",
+    "highway": "highway_entrance",
+    "highway_entrance": "highway_entrance",
+    "motorway": "highway_entrance",
+    "motorway_begin": "highway_entrance",
+    "highway_exit": "highway_exit",
+    "motorway_end": "highway_exit",
+    "end_motorway": "highway_exit",
+    "end motorway": "highway_exit",
+    "roundabout": "round_about",
+    "roundabout_sign": "round_about",
+    "round_about": "round_about",
+    "one_way": "one_way",
+    "one-way": "one_way",
+    "oneway": "one_way",
+    "one way": "one_way",
+    "no_entry": "no_entry",
+    "no-entry": "no_entry",
+    "no entry": "no_entry",
+    "noentry": "no_entry",
+    "do_not_enter": "no_entry",
+    "no_enter": "no_entry",
 }
 
 
 class threadSignDetection(ThreadWithStop):
-    """Thread that continuously reads camera frames and runs YOLOv8 sign detection.
-
-    Subscribes to the mainCamera message to get frames.
-    Publishes SignDetected messages with the detected sign name and confidence.
-
-    Args:
-        queueList: Dictionary of multiprocessing queues.
-        logging: Logger instance.
-        debugging: Enable debug output.
-    """
+    """Thread that runs YOLOv8 sign and traffic-light detection on camera frames."""
 
     def __init__(self, queueList, logging, debugging=False):
         self.queuesList = queueList
         self.logging = logging
         self.debugging = debugging
 
-        # Load model
         self.model = None
         self.model_path = "yolov8n.pt"
-        self._load_model()
-
-        # Confidence threshold
         self.conf_threshold = 0.5
 
-        # Rate limiting: don't run inference on every single frame
         self.last_inference_time = 0
-        self.inference_interval = 0.2  # seconds (5 FPS inference)
+        self.inference_interval = 0.2
 
-        # Subscribe to camera frames
         self.cameraSubscriber = messageHandlerSubscriber(
             self.queuesList, mainCamera, "lastOnly", True
         )
+        self.signPublisher = messageHandlerSender(self.queuesList, SignDetected)
 
-        # Publish detected signs
-        self.signPublisher = messageHandlerSender(
-            self.queuesList, SignDetected
-        )
-
+        self._load_model()
         super(threadSignDetection, self).__init__()
 
+    def _resolve_repo_root(self):
+        return Path(__file__).resolve().parents[4]
+
+    def _candidate_model_paths(self):
+        root = self._resolve_repo_root()
+        return [
+            root / "src/perception/sign_recognition/bfmc_best_traffic_lights.pt",
+            root / "src/perception/sign_recognition/bfmc_best_shirts.pt",
+            root / "src/perception/sign_recognition/bfmc_best.pt",
+            root / "src/perception/sign_recognition/best.pt",
+            root / "runs/detect/bfmc_models/sign_detector_shirts/weights/best.pt",
+            root / "runs/detect/bfmc_models/sign_detector/weights/best.pt",
+            root / "src/perception/sign_recognition/last.pt",
+            Path("yolov8n.pt"),
+        ]
+
     def _load_model(self):
-        """Load the YOLO model. Tries custom model first, falls back to COCO."""
         if YOLO is None:
             self.logging.warning(
-                "⚠️ ultralytics not installed! Sign detection disabled. "
-                "Run: pip install ultralytics"
+                "ultralytics not installed; sign detection disabled. Run: pip install ultralytics"
             )
             return
 
-        import os
-        # ── Model File Lookup (Priority Order) ──────────────────────────
-        # The detector tries each path in order and uses the first one found.
-        #
-        # Model files explained:
-        #   bfmc_best_shirts.pt  — RECOMMENDED. Fine-tuned from bfmc_best.pt
-        #                          with 10 extra epochs of negative mining
-        #                          (39 red shirt images as backgrounds).
-        #                          Reduces false positives on red clothing.
-        #                          Dataset: 600 images (561 signs + 39 shirts).
-        #                          Final mAP50: 0.933, mAP50-95: 0.843.
-        #
-        #   bfmc_best.pt         — Base production model. 100 epochs trained
-        #                          on Bosch Traffic Signs dataset (561 images,
-        #                          9 classes). mAP50: 0.927, mAP50-95: 0.837.
-        #                          Source: runs/detect/bfmc_models/sign_detector/
-        #
-        #   bfmc_last_shirts.pt  — Last checkpoint from the shirt fine-tuning
-        #                          run (epoch 10/10). Use for resuming training.
-        #
-        #   last.pt              — Last checkpoint from the original 100-epoch
-        #                          training run. Use for resuming training.
-        #
-        #   yolov8n.pt (fallback) — Ultralytics COCO pretrained (80 classes).
-        #                           Only detects "stop sign" from the 9 BFMC signs.
-        # ─────────────────────────────────────────────────────────────────
-        custom_paths = [
-            "src/perception/sign_recognition/bfmc_best_shirts.pt",  # Best + negative mining
-            "src/perception/sign_recognition/bfmc_best.pt",         # Base 100-epoch model
-            "models/sign_detector_best.pt",                          # Legacy path
-            "models/best.pt",                                        # Legacy path
-            "src/perception/sign_recognition/last.pt",               # Last checkpoint
-        ]
-        for path in custom_paths:
-            if os.path.exists(path):
+        for path in self._candidate_model_paths():
+            if isinstance(path, Path) and path.exists():
+                self.model_path = str(path)
+                break
+            if isinstance(path, str):
                 self.model_path = path
                 break
 
@@ -161,30 +130,26 @@ class threadSignDetection(ThreadWithStop):
             self.model = YOLO(self.model_path)
             class_names = list(self.model.names.values())
             self.logging.info(
-                f"✅ Sign Detection: loaded {self.model_path} "
-                f"({len(class_names)} classes)"
+                f"Sign Detection loaded model: {self.model_path} ({len(class_names)} classes)"
             )
-        except Exception as e:
-            self.logging.error(f"❌ Failed to load YOLO model: {e}")
+        except Exception as exc:
+            self.logging.error(f"Failed to load YOLO model: {exc}")
             self.model = None
 
-        """Main work loop — receive camera frame, run inference, publish results."""
+    def thread_work(self):
         if self.model is None:
             time.sleep(1)
             return
 
-        # Rate limiting
         now = time.time()
         if now - self.last_inference_time < self.inference_interval:
             return
         self.last_inference_time = now
 
-        # Get latest camera frame
         frame_msg = self.cameraSubscriber.receive()
         if frame_msg is None:
             return
 
-        # Decode the frame (camera sends base64 encoded JPEG)
         try:
             if isinstance(frame_msg, str):
                 image_data = base64.b64decode(frame_msg)
@@ -194,58 +159,48 @@ class threadSignDetection(ThreadWithStop):
                 frame = frame_msg
             else:
                 return
-        except Exception as e:
+        except Exception as exc:
             if self.debugging:
-                self.logging.warning(f"Frame decode error: {e}")
+                self.logging.warning(f"Frame decode error: {exc}")
             return
 
         if frame is None:
             return
 
-        # Run YOLO inference
         try:
             results = self.model(frame, conf=self.conf_threshold, verbose=False)
-        except Exception as e:
+        except Exception as exc:
             if self.debugging:
-                self.logging.warning(f"Inference error: {e}")
+                self.logging.warning(f"Inference error: {exc}")
             return
 
-        # Process detections
-        for r in results:
-            for box in r.boxes:
+        for result in results:
+            for box in result.boxes:
                 cls_id = int(box.cls[0])
-                raw_label = self.model.names[cls_id].lower().strip()
+                raw_label = str(self.model.names[cls_id]).lower().strip()
                 conf = float(box.conf[0])
 
-                # Map to BFMC sign name
-                bfmc_sign = LABEL_MAP.get(raw_label)
-                if bfmc_sign is None:
+                mapped_label = LABEL_MAP.get(raw_label)
+                if mapped_label is None:
                     continue
 
                 x1, y1, x2, y2 = map(int, box.xyxy[0])
-
-                # ── Post-Detection Filters ──
-                # Validate shape, color, and size to reject false positives
-                # (e.g., red shirts, blue cars, tiny noise detections).
-                if FILTERS_AVAILABLE:
-                    if not validate_detection(frame, bfmc_sign, (x1, y1, x2, y2)):
+                if FILTERS_AVAILABLE and mapped_label not in TRAFFIC_LIGHT_LABELS:
+                    if not validate_detection(frame, mapped_label, (x1, y1, x2, y2)):
                         if self.debugging:
                             self.logging.info(
-                                f"  ❌ FILTERED: {bfmc_sign} ({conf:.0%}) "
-                                f"at [{x1},{y1},{x2},{y2}]")
-                        continue  # Rejected by filters
+                                f"Filtered {mapped_label} ({conf:.0%}) at [{x1},{y1},{x2},{y2}]"
+                            )
+                        continue
 
                 detection = {
-                    "sign": bfmc_sign,
+                    "sign": mapped_label,
                     "confidence": round(conf, 3),
                     "bbox": [x1, y1, x2, y2],
                 }
-
-                # Publish to the message bus
                 self.signPublisher.send(json.dumps(detection))
 
                 if self.debugging:
                     self.logging.info(
-                        f"🔍 Sign: {bfmc_sign} ({conf:.0%}) "
-                        f"at [{x1},{y1},{x2},{y2}]"
+                        f"Detected {mapped_label} ({conf:.0%}) at [{x1},{y1},{x2},{y2}]"
                     )
