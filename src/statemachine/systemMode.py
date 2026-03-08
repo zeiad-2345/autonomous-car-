@@ -55,6 +55,11 @@ class SystemMode(Enum):
             "process": {
                 "enabled": False,
             }
+        },
+        "planner": {
+            "process": {
+                "enabled": True,
+            }
         }
     }
 
@@ -81,6 +86,11 @@ class SystemMode(Enum):
         "traffic_com": {
             "process": {
                 "enabled": False,
+            }
+        },
+        "planner": {
+            "process": {
+                "enabled": True,
             }
         }
     }
@@ -109,6 +119,11 @@ class SystemMode(Enum):
             "process": {
                 "enabled": False,
             }
+        },
+        "planner": {
+            "process": {
+                "enabled": False,  # Manual means human control!
+            }
         }
     }
     
@@ -133,6 +148,11 @@ class SystemMode(Enum):
             }
         },
         "traffic_com": {
+            "process": {
+                "enabled": True,
+            }
+        },
+        "planner": {
             "process": {
                 "enabled": True,
             }
@@ -163,5 +183,11 @@ class SystemMode(Enum):
             "process": {
                 "enabled": False,
             }
+        },
+        "planner": {
+            "process": {
+                "enabled": False, # Everything stops
+            }
         }
     }
+

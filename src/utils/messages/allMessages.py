@@ -306,7 +306,8 @@ class StateChange(Enum):
 ################################# From SignDetection ##################################
 class SignDetected(Enum):
     Queue = "General"
-    Owner = "threadSignDetection"
+    Owner = "threadPlanner"  # Re-routed to the new Planner node!
     msgID = 1
     msgType = "str"  # JSON: {"sign": "stop", "confidence": 0.95, "bbox": [x1,y1,x2,y2]}
+
 
