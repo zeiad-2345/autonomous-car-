@@ -43,8 +43,31 @@ class MapBuilder:
 
     def draw(self):
         tmp = self.img.copy()
-        msg = f"State: {self.state} | SignType: {self.current_type or 'NONE (Press keys)'}"
-        cv2.putText(tmp, msg, (20,40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 2)
+        
+        # Draw instructional overlay panel at the top
+        overlay = tmp.copy()
+        cv2.rectangle(overlay, (0, 0), (self.img.shape[1], 120), (0, 0, 0), -1)
+        cv2.addWeighted(overlay, 0.7, tmp, 0.3, 0, tmp)
+        
+        # State-specific instructions
+        if self.state == "SCALE_1":
+            title = "STEP 1: DEFINE SCALE (Click Point 1)"
+            desc = "Find a known distance (like the width of a lane = 35cm). Click the left side."
+        elif self.state == "SCALE_2":
+            title = "STEP 2: DEFINE SCALE (Click Point 2)"
+            desc = "Click the right side of the lane. Then look at your Terminal to type '35'."
+        elif self.state == "ORIGIN":
+            title = "STEP 3: SET START POINT (Origin)"
+            desc = "Click exactly where the car starts. This will be coordinate X=0, Y=0."
+        else:
+            title = f"STEP 4: PLACE WAYPOINTS | Selected: {self.current_type or 'NONE (Press a key first)'}"
+            desc = "Keys: 'c' Crosswalk | 's' Stop | 'r' Roundabout | 'p' Parking | 'h' Highway | 'y' Priority"
+            desc2 = "Action: Press key, then click exactly where the sign is located."
+            cv2.putText(tmp, desc2, (20,105), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,100), 2)
+            cv2.putText(tmp, "Press 'q' when finished to Save & Exit", (20,135), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,0,255), 2)
+
+        cv2.putText(tmp, title, (20,40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
+        cv2.putText(tmp, desc, (20,75), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,255), 2)
         
         if self.scale_p1: cv2.circle(tmp, self.scale_p1, 5, (255,0,0), -1)
         if self.scale_p2: cv2.circle(tmp, self.scale_p2, 5, (255,0,0), -1)
@@ -53,8 +76,8 @@ class MapBuilder:
         for wp in self.waypoints:
             px = int(self.origin[0] + wp["x_cm"] / self.cm_per_px)
             py = int(self.origin[1] - wp["y_cm"] / self.cm_per_px)
-            cv2.circle(tmp, (px, py), 5, (0,165,255), -1)
-            cv2.putText(tmp, wp["type"], (px+5, py-5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,165,255), 1)
+            cv2.circle(tmp, (px, py), 6, (0,165,255), -1)
+            cv2.putText(tmp, wp["type"].upper(), (px+10, py-5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,255), 2)
 
         cv2.imshow("MapBuilder", tmp)
 
