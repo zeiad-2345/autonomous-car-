@@ -27,6 +27,7 @@ import time
 import threading
 import argparse
 import socket
+import signal
 
 import cv2
 import numpy as np
@@ -435,18 +436,20 @@ class PlannerThread(threading.Thread):
     No ROS, no external libraries — pure Python logic.
     """
 
-    def __init__(self, state: SharedState):
+    def __init__(self, state: SharedState, args):
         super().__init__(name="PlannerThread", daemon=True)
         self.state = state
+        self.args = args
         self._rule_active_until = 0
         self._current_speed = 0
         self._current_steer = 0
 
     def run(self):
         print("[Planner] Starting…")
-        # Start at cruise speed instead of rest for the track test
-        self.state.set_command(DEFAULT_SPEED, 0)
-        self._current_speed = DEFAULT_SPEED
+        # Start at cruise speed ONLY if --cruise is enabled
+        start_speed = DEFAULT_SPEED if self.args.cruise else 0
+        self.state.set_command(start_speed, 0)
+        self._current_speed = start_speed
 
         while self.state.is_running():
             detection = self.state.get_detection()
@@ -570,6 +573,8 @@ Examples:
                         help="Run without Arduino (dry-run / bench testing)")
     parser.add_argument("--webcam-index",type=int,   default=0,
                         help="OpenCV webcam index if no Pi Camera is present (default 0)")
+    parser.add_argument("--cruise",      action="store_true",
+                        help="Start driving immediately at cruise speed (default False)")
     return parser.parse_args()
 
 
@@ -590,9 +595,16 @@ if __name__ == "__main__":
 
     state = SharedState()
 
+    def handle_signal(sig, frame):
+        print(f"\n[Skynet] 🛑 Signal {sig} received — Emergency Shutdown…")
+        state.shutdown()
+
+    signal.signal(signal.SIGINT,  handle_signal)
+    signal.signal(signal.SIGTERM, handle_signal)
+
     # ── Core threads (always started) ────────────────────────────────────
     perception = PerceptionThread(state, args)
-    planner    = PlannerThread(state)
+    planner    = PlannerThread(state, args)
     serial     = SerialThread(state, args)
 
     # ── Optional perception threads ───────────────────────────────────────
