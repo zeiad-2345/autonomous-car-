@@ -120,16 +120,17 @@ SIGN_COLORS = {
 SIGN_RULES = {
     "stop":             {"speed": 0,   "steer": 0, "duration_s": 3},
     "highway_entrance": {"speed": 30,  "steer": 0, "duration_s": 0},
-    "highway_exit":     {"speed": 12,  "steer": 0, "duration_s": 0},
-    "crosswalk":        {"speed": 10,  "steer": 0, "duration_s": 0},
+    "highway_exit":     {"speed": 15,  "steer": 0, "duration_s": 0},
+    "crosswalk":        {"speed": 8,   "steer": 0, "duration_s": 2},
     "roundabout":       {"speed": 10,  "steer": 0, "duration_s": 0},
-    "parking":          {"speed": 0,   "steer": 0, "duration_s": 0},
-    "priority":         {"speed": 20,  "steer": 0, "duration_s": 0},
-    "one_way":          {"speed": 20,  "steer": 0, "duration_s": 0},
+    "parking":          {"speed": 0,   "steer": 0, "duration_s": 5},
+    "priority":         {"speed": 15,  "steer": 0, "duration_s": 0},
+    "one_way":          {"speed": 15,  "steer": 0, "duration_s": 0},
     "no_entry":         {"speed": 0,   "steer": 0, "duration_s": 0},
 }
 
-DEFAULT_SPEED  = 15   # Cruise speed when no sign is actively in effect
+DEFAULT_SPEED  = 15   # city cruise speed (cm/s) — BFMC max = 20
+HIGHWAY_SPEED  = 30   # highway cruise speed (cm/s) — BFMC max = 40
 STREAM_PORT    = 5012 # Must match frame_receiver_server.py
 INFERENCE_HZ   = 10   # YOLO rate: 10 Hz → 4cm per frame at 40cm/s highway speed (safe)
 
@@ -446,10 +447,11 @@ class PlannerThread(threading.Thread):
         self._current_speed = 0
         self._current_steer = 0
         # Lane-following PD gains (tune these on the track)
-        self._kp_lane = 18.0   # proportional gain: error → steer degrees
-        self._kd_lane = 5.0    # derivative gain: heading → steer damping
+        self._kp_lane = 25.0   # proportional gain: error → steer degrees (MORE AGGRESSIVE)
+        self._kd_lane = 8.0    # derivative gain: heading → steer damping
         self._last_lane_time = 0  # timestamp of last valid lane result
         self._no_lane_timeout = 2.0  # seconds without lane → brake
+        self._is_highway = False  # track whether we're on highway
 
     def run(self):
         print("[Planner] Starting…")
@@ -480,7 +482,7 @@ class PlannerThread(threading.Thread):
             # If a timed rule (e.g., stop for 3s) has expired, resume cruise
             if self._rule_active_until > 0 and now > self._rule_active_until:
                 self._rule_active_until = 0
-                self._current_speed = DEFAULT_SPEED
+                self._current_speed = HIGHWAY_SPEED if self._is_highway else DEFAULT_SPEED
                 self._current_steer = 0
                 print("[Planner] ⏱  Stop duration elapsed → resuming cruise")
 
@@ -489,6 +491,19 @@ class PlannerThread(threading.Thread):
             if lane is not None:
                 error   = lane.get("error", 0.0)    # -1.0 (left) to +1.0 (right)
                 heading = lane.get("heading", 0.0)   # radians
+                lane_type = lane.get("lane_type", "city")
+
+                # Update speed based on lane type (city vs highway)
+                if lane_type == "highway" and not self._is_highway:
+                    self._is_highway = True
+                    if self._current_speed > 0 and self._rule_active_until <= 0:
+                        self._current_speed = HIGHWAY_SPEED
+                        print(f"[Planner] 🛣️  Highway detected → speed={HIGHWAY_SPEED}")
+                elif lane_type != "highway" and self._is_highway:
+                    self._is_highway = False
+                    if self._current_speed > 0 and self._rule_active_until <= 0:
+                        self._current_speed = DEFAULT_SPEED
+                        print(f"[Planner] 🏘️  City detected → speed={DEFAULT_SPEED}")
 
                 # PD controller: steer = Kp * error + Kd * heading
                 # error > 0 means lane centre is to the RIGHT → steer RIGHT (positive)
