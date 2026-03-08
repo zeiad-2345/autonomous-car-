@@ -143,6 +143,52 @@ SIGN_FILTERS = {
         "min_area_px": 150,
         "max_area_frac": 0.40,
     },
+    
+    "green": {
+       "aspect_ratio": 1.8,
+        "aspect_tol": 1.0,
+        "hsv_ranges": [
+            (35, 50, 50, 90, 255, 255),
+        ],
+        "color_min": 0.02,
+        "min_area_px": 80,
+        "max_area_frac": 0.20,
+    },
+    "red": {
+        "aspect_ratio": 1.8,
+        "aspect_tol": 1.0,
+        "hsv_ranges": [
+            (35, 50, 50, 90, 255, 255),   # Blue-Green range
+        ],
+        "color_min": 0.02,
+        "min_area_px": 80,
+        "max_area_frac": 0.20,
+    },
+    "yellow": {
+       "aspect_ratio": 1.8,
+        "aspect_tol": 1.0,
+        "hsv_ranges": [
+            (15, 50, 50, 40, 255, 255),
+        ],
+        "color_min": 0.02,
+        "min_area_px": 80,
+        "max_area_frac": 0.20,
+    },
+    "redandyellow":{
+        "aspect_ratio": 1.8,
+        "aspect_tol": 1.0,
+        "hsv_ranges": [
+            (0, 50, 50, 10, 255, 255),
+            (170, 50, 50, 180, 255, 255),
+            (15, 50, 50, 40, 255, 255),
+        ],
+        "color_min": 0.03,
+        "min_area_px": 80,
+        "max_area_frac": 0.20,
+    },
+    
+    
+    
 }
 
 

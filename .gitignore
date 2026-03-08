@@ -3,3 +3,21 @@ docs/build/
 __pycache__
 **/*.pyc
 /src/dashboard/frontend/node_modules
+
+# --- YOLO/Ultralytics artifacts ---
+runs/
+**/*.cache
+**/*.npy
+
+# --- trained weights ---
+*.pt
+*.onnx
+*.engine
+
+# --- virtual envs ---
+.venv*/
+venv*/
+
+# --- python junk ---
+__pycache__/
+*.pyc

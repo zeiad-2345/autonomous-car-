@@ -65,11 +65,23 @@ BFMC_SIGNS = {
     "roundabout":        {"color": (255, 100, 0),  "label": "ROUNDABOUT"},
     "one_way":           {"color": (255, 50, 50),  "label": "ONE WAY"},
     "no_entry":          {"color": (50, 50, 255),  "label": "NO ENTRY"},
+    "green":             {"color": (0, 255, 0),    "label": "GREEN"},
+    "red":               {"color": (0, 0, 255),    "label": "RED"},
+    "yellow":            {"color": (0, 255, 255),  "label": "YELLOW"},
+    "redandyellow":      {"color": (0, 165, 255),  "label": "RED+YELLOW"},
 }
 
 # Maps various model label names → our canonical BFMC sign names.
 # Add entries here when you switch to a new pretrained model.
 LABEL_MAP = {
+     "green":          "green",
+    "red":            "red",
+    "yellow":         "yellow",
+    "redandyellow":   "redandyellow",
+    "red_yellow":     "redandyellow",
+    "red-yellow":     "redandyellow",
+    "red and yellow": "redandyellow",
+    
     # ── COCO labels (yolov8n.pt) ──
     "stop sign":            "stop",
 

@@ -25,6 +25,13 @@ except ImportError:
 # ─── Label mapping: model output → BFMC sign name ────────────────────────────
 LABEL_MAP = {
     # COCO
+    "green":          "green",
+    "red":            "red",
+    "yellow":         "yellow",
+    "redandyellow":   "redandyellow",
+    "red_yellow":     "redandyellow",
+    "red-yellow":     "redandyellow",
+    "red and yellow": "redandyellow",
     "stop sign":            "stop",
     # Roboflow / GTSDB / custom models
     "stop":                 "stop",
@@ -160,7 +167,7 @@ class threadSignDetection(ThreadWithStop):
         except Exception as e:
             self.logging.error(f"❌ Failed to load YOLO model: {e}")
             self.model = None
-∫∫
+
         """Main work loop — receive camera frame, run inference, publish results."""
         if self.model is None:
             time.sleep(1)
