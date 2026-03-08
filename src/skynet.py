@@ -295,14 +295,19 @@ class PerceptionThread(threading.Thread):
             except Exception as e:
                 print(f"[Perception] Pi Camera failed: {e}. Falling back to OpenCV.")
 
-        idx = self.args.webcam_index if hasattr(self.args, "webcam_index") else 0
+        idx_candidates = [idx, 1, 0, 2] # Try user index, then fallback
         self.cam = None
-        self.cap = cv2.VideoCapture(idx)
-        if self.cap.isOpened():
-            print(f"[Perception] ✅ OpenCV webcam {idx} initialized")
-        else:
-            print("[Perception] ⚠️  No camera found. Perception disabled.")
-            self.cap = None
+        self.cap = None
+        
+        for i in idx_candidates:
+            self.cap = cv2.VideoCapture(i)
+            if self.cap.isOpened():
+                print(f"[Perception] ✅ OpenCV webcam {i} initialized")
+                return
+            self.cap.release()
+            
+        print("[Perception] ⚠️  No camera found. Perception disabled.")
+        self.cap = None
 
     def _get_frame(self):
         if self.cam is not None and PICAM_AVAILABLE:
@@ -439,8 +444,9 @@ class PlannerThread(threading.Thread):
 
     def run(self):
         print("[Planner] Starting…")
-        # Always begin from rest
-        self.state.set_command(0, 0)
+        # Start at cruise speed instead of rest for the track test
+        self.state.set_command(DEFAULT_SPEED, 0)
+        self._current_speed = DEFAULT_SPEED
 
         while self.state.is_running():
             detection = self.state.get_detection()
@@ -556,8 +562,8 @@ Examples:
                         help="YOLO confidence threshold (default 0.5)")
     parser.add_argument("--no-filters",  action="store_true",
                         help="Disable post-detection shape/color/size filters")
-    parser.add_argument("--laptop-ip",   type=str,   default="10.105.27.45",
-                        help="Laptop IP for video streaming (default 10.105.27.45)")
+    parser.add_argument("--laptop-ip",   type=str,   default="10.82.10.45",
+                        help="Laptop IP for video streaming (default 10.82.10.45)")
     parser.add_argument("--no-stream",   action="store_true",
                         help="Disable TCP video streaming to laptop")
     parser.add_argument("--no-arduino",  action="store_true",
