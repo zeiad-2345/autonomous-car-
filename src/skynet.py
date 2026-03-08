@@ -296,16 +296,18 @@ class PerceptionThread(threading.Thread):
             except Exception as e:
                 print(f"[Perception] Pi Camera failed: {e}. Falling back to OpenCV.")
 
-        idx_candidates = [idx, 1, 0, 2] # Try user index, then fallback
+        idx = self.args.webcam_index if hasattr(self.args, "webcam_index") else 0
+        idx_candidates = list(dict.fromkeys([idx, 0, 1, 2]))  # unique, user-preferred first
         self.cam = None
         self.cap = None
         
         for i in idx_candidates:
-            self.cap = cv2.VideoCapture(i)
-            if self.cap.isOpened():
+            cap = cv2.VideoCapture(i)
+            if cap.isOpened():
+                self.cap = cap
                 print(f"[Perception] ✅ OpenCV webcam {i} initialized")
                 return
-            self.cap.release()
+            cap.release()
             
         print("[Perception] ⚠️  No camera found. Perception disabled.")
         self.cap = None
@@ -443,6 +445,11 @@ class PlannerThread(threading.Thread):
         self._rule_active_until = 0
         self._current_speed = 0
         self._current_steer = 0
+        # Lane-following PD gains (tune these on the track)
+        self._kp_lane = 18.0   # proportional gain: error → steer degrees
+        self._kd_lane = 5.0    # derivative gain: heading → steer damping
+        self._last_lane_time = 0  # timestamp of last valid lane result
+        self._no_lane_timeout = 2.0  # seconds without lane → brake
 
     def run(self):
         print("[Planner] Starting…")
@@ -452,15 +459,18 @@ class PlannerThread(threading.Thread):
         self._current_speed = start_speed
 
         while self.state.is_running():
-            detection = self.state.get_detection()
             now = time.time()
 
+            # ── 1. Sign detection (overrides everything) ──────────────────
+            detection = self.state.get_detection()
             if detection:
                 sign = detection["sign"]
                 rule = SIGN_RULES.get(sign)
                 if rule:
                     self._current_speed = rule["speed"]
-                    self._current_steer = rule["steer"]
+                    # Sign steer only overrides if non-zero in the rule table
+                    if rule["steer"] != 0:
+                        self._current_steer = rule["steer"]
                     if rule["duration_s"] > 0:
                         self._rule_active_until = now + rule["duration_s"]
                     else:
@@ -474,12 +484,38 @@ class PlannerThread(threading.Thread):
                 self._current_steer = 0
                 print("[Planner] ⏱  Stop duration elapsed → resuming cruise")
 
+            # ── 2. Lane following (continuous steering) ────────────────────
+            lane = self.state.get_lane()
+            if lane is not None:
+                error   = lane.get("error", 0.0)    # -1.0 (left) to +1.0 (right)
+                heading = lane.get("heading", 0.0)   # radians
+
+                # PD controller: steer = Kp * error + Kd * heading
+                # error > 0 means lane centre is to the RIGHT → steer RIGHT (positive)
+                # Clamp to Arduino steer range: -25 to +25
+                steer_cmd = self._kp_lane * error + self._kd_lane * heading
+                steer_cmd = max(-25, min(25, int(steer_cmd)))
+
+                # Only apply lane steering if no sign rule is actively overriding steer
+                if self._rule_active_until <= 0 or SIGN_RULES.get(detection.get("sign", "") if detection else "", {}).get("steer", 0) == 0:
+                    self._current_steer = steer_cmd
+
+                self._last_lane_time = now
+
+            # ── 3. Safety: brake if no lane data for too long ─────────────
+            if self._current_speed > 0 and self._last_lane_time > 0:
+                if now - self._last_lane_time > self._no_lane_timeout:
+                    self._current_speed = 0
+                    self._current_steer = 0
+                    print("[Planner] ⚠️  No lane data for 2s → EMERGENCY STOP")
+
             self.state.set_command(self._current_speed, self._current_steer)
             time.sleep(0.05)  # 20 Hz planner loop
 
         # Safety: stop the car on shutdown
         self.state.set_command(0, 0)
         print("[Planner] Stopped.")
+
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -528,6 +564,10 @@ class SerialThread(threading.Thread):
             if steer != last_steer:
                 self.ctrl.send_steer(steer)
                 last_steer = steer
+            # Heartbeat: re-send current speed every 200ms to keep watchdog alive
+            # This ensures the Arduino dead man's switch doesn't trigger
+            elif speed == last_speed and steer == last_steer:
+                self.ctrl.send_speed(speed)
             time.sleep(0.05)  # 20 Hz
 
         self.ctrl.stop()
