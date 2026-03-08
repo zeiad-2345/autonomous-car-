@@ -1,23 +1,33 @@
+test: test/images
+train: train/images
+val: valid/images
+
+nc: 13
 names:
-- crosswalk
-- highway_entrance
-- highway_exit
-- no_entry
-- one_way
-- parking
-- priority
-- round_about
-- stop
-nc: 9
+  - crosswalk
+  - highway_entrance
+  - highway_exit
+  - no_entry
+  - one_way
+  - parking
+  - priority
+  - round_about
+  - stop
+  - green
+  - red
+  - redandyellow
+  - yellow
+
 roboflow:
-  license: CC BY 4.0
-  project: bosch-traffic-signs
-  url: https://universe.roboflow.com/unlam-swoow/bosch-traffic-signs/dataset/5
-  version: 5
-  workspace: unlam-swoow
-test: /Users/hatem/University/AXEL/Challenges/25-26/Bosch Future Mobility Challenge/raven-brain-stack/training_workspace/Bosch
-  Traffic Signs YOLOv8/test/images
-train: /Users/hatem/University/AXEL/Challenges/25-26/Bosch Future Mobility Challenge/raven-brain-stack/training_workspace/Bosch
-  Traffic Signs YOLOv8/train/images
-val: /Users/hatem/University/AXEL/Challenges/25-26/Bosch Future Mobility Challenge/raven-brain-stack/training_workspace/Bosch
-  Traffic Signs YOLOv8/valid/images
+  signs:
+    license: "CC BY 4.0"
+    project: "bosch-traffic-signs"
+    url: "https://universe.roboflow.com/unlam-swoow/bosch-traffic-signs/dataset/5"
+    version: 5
+    workspace: "unlam-swoow"
+  lights:
+    license: "CC BY 4.0"
+    project: "traffic-lights-adcan"
+    url: "https://universe.roboflow.com/yeditepe-university-7cp5j/traffic-lights-adcan/dataset/3"
+    version: 3
+    workspace: "yeditepe-university-7cp5j"

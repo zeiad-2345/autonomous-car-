@@ -32,6 +32,7 @@ from pathlib import Path
 from datetime import datetime
 
 import cv2
+import numpy as np
 
 try:
     from ultralytics import YOLO
@@ -51,6 +52,7 @@ except ImportError:
 
 # Global flag — toggled by --no-filters CLI arg
 USE_FILTERS = True
+TRAFFIC_LIGHT_LABELS = {"green", "red", "yellow", "redandyellow"}
 
 
 # ─── BFMC Target Signs ────────────────────────────────────────────────────────
@@ -65,11 +67,25 @@ BFMC_SIGNS = {
     "roundabout":        {"color": (255, 100, 0),  "label": "ROUNDABOUT"},
     "one_way":           {"color": (255, 50, 50),  "label": "ONE WAY"},
     "no_entry":          {"color": (50, 50, 255),  "label": "NO ENTRY"},
+    "green":             {"color": (0, 255, 0),    "label": "GREEN"},
+    "red":               {"color": (0, 0, 255),    "label": "RED"},
+    "yellow":            {"color": (0, 255, 255),  "label": "YELLOW"},
+    "redandyellow":      {"color": (0, 165, 255),  "label": "RED+YELLOW"},
+    "traffic_light":     {"color": (255, 255, 0),  "label": "TRAFFIC LIGHT"},
 }
 
 # Maps various model label names → our canonical BFMC sign names.
 # Add entries here when you switch to a new pretrained model.
 LABEL_MAP = {
+     "green":          "green",
+    "red":            "red",
+    "yellow":         "yellow",
+    "redandyellow":   "redandyellow",
+    "red_yellow":     "redandyellow",
+    "red-yellow":     "redandyellow",
+    "red and yellow": "redandyellow",
+    "traffic light":  "traffic_light",
+    
     # ── COCO labels (yolov8n.pt) ──
     "stop sign":            "stop",
 
@@ -234,12 +250,65 @@ def draw_hud(frame, fps, model_name, num_detections, paused=False):
 
 # ─── Main Loop ────────────────────────────────────────────────────────────────
 
+def infer_traffic_light_state(frame, bbox):
+    """Infer red/yellow/green state inside a detected traffic-light box."""
+    x1, y1, x2, y2 = bbox
+    h, w = frame.shape[:2]
+    x1, y1 = max(0, x1), max(0, y1)
+    x2, y2 = min(w, x2), min(h, y2)
+    if x2 <= x1 or y2 <= y1:
+        return "traffic_light"
+
+    roi = frame[y1:y2, x1:x2]
+    if roi.size == 0:
+        return "traffic_light"
+
+    # Use only the inner region of the traffic-light box to avoid outside colors.
+    rh, rw = roi.shape[:2]
+    mx, my = int(rw * 0.15), int(rh * 0.10)
+    if rw - 2 * mx > 6 and rh - 2 * my > 6:
+        roi = roi[my:rh - my, mx:rw - mx]
+
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+
+    red1 = cv2.inRange(hsv, (0, 80, 80), (10, 255, 255))
+    red2 = cv2.inRange(hsv, (170, 80, 80), (180, 255, 255))
+    red = cv2.bitwise_or(red1, red2)
+    yellow = cv2.inRange(hsv, (15, 80, 80), (40, 255, 255))
+    green = cv2.inRange(hsv, (35, 80, 80), (90, 255, 255))
+
+    # Focus on expected lamp positions (top/middle/bottom circles).
+    h2, w2 = hsv.shape[:2]
+    lamp_mask = np.zeros((h2, w2), dtype=np.uint8)
+    cx = w2 // 2
+    radius = max(2, min(w2, h2) // 8)
+    ys = [h2 // 6, h2 // 2, (5 * h2) // 6]
+    for cy in ys:
+        cv2.circle(lamp_mask, (cx, cy), radius, 255, -1)
+
+    scores = {
+        "red": cv2.countNonZero(cv2.bitwise_and(red, lamp_mask)),
+        "yellow": cv2.countNonZero(cv2.bitwise_and(yellow, lamp_mask)),
+        "green": cv2.countNonZero(cv2.bitwise_and(green, lamp_mask)),
+    }
+    best_state = max(scores, key=scores.get)
+    total = max(cv2.countNonZero(lamp_mask), 1)
+    if scores[best_state] / total < 0.01:
+        return "traffic_light"
+    return best_state
 def run(args):
     # Model
     model_path = args.model or "yolov8n.pt"
     print(f"🤖 Loading model: {model_path}")
     model = YOLO(model_path)
     model_name = Path(model_path).stem
+    traffic_box_model = None
+    if args.add_traffic_box and "yolov8n.pt" not in str(model_path):
+        try:
+            traffic_box_model = YOLO("yolov8n.pt")
+            print("🚦 Extra traffic-box detector enabled: yolov8n.pt")
+        except Exception as e:
+            print(f"⚠️ Could not load extra traffic-box detector: {e}")
 
     # Print model classes for debugging
     class_names = list(model.names.values())
@@ -269,6 +338,14 @@ def run(args):
             # Single image mode
             results = model(img, conf=args.conf, verbose=False)
             detections = _extract_detections(results, model, model_path, img)
+            if traffic_box_model is not None:
+                extra = traffic_box_model(img, conf=args.conf, verbose=False)
+                detections.extend(
+                    _extract_detections(
+                        extra, traffic_box_model, "yolov8n.pt", img,
+                        allowed_labels={"traffic_light"},
+                    )
+                )
             annotated = draw_detections(img.copy(), detections)
             annotated = draw_hud(annotated, 0, model_name, len(detections))
 
@@ -316,6 +393,14 @@ def run(args):
                 # Inference
                 results = model(frame, conf=args.conf, verbose=False)
                 detections = _extract_detections(results, model, model_path, frame)
+                if traffic_box_model is not None:
+                    extra = traffic_box_model(frame, conf=args.conf, verbose=False)
+                    detections.extend(
+                        _extract_detections(
+                            extra, traffic_box_model, "yolov8n.pt", frame,
+                            allowed_labels={"traffic_light"},
+                        )
+                    )
 
                 # Draw
                 annotated = draw_detections(frame, detections)
@@ -364,7 +449,7 @@ def run(args):
     print("  👋 Detection stopped.\n")
 
 
-def _extract_detections(results, model, model_path, frame=None):
+def _extract_detections(results, model, model_path, frame=None, allowed_labels=None):
     """Extract and map detections from YOLO results.
     
     If USE_FILTERS is True and a frame is provided, each detection is
@@ -380,14 +465,19 @@ def _extract_detections(results, model, model_path, frame=None):
             mapped, color, is_bfmc = map_label(raw_label, model_path)
             if mapped is None:
                 continue
-
+            if allowed_labels is not None and mapped not in allowed_labels:
+                continue
             x1, y1, x2, y2 = map(int, box.xyxy[0])
+            if mapped == "traffic_light" and frame is not None:
+                mapped = infer_traffic_light_state(frame, (x1, y1, x2, y2))
+                if mapped in BFMC_SIGNS:
+                    color = BFMC_SIGNS[mapped]["color"]
 
             # ── Post-Detection Filters ──
             # Validate shape, color, and size to reject false positives
             # (e.g., red shirts, blue cars, tiny noise detections).
             if (USE_FILTERS and FILTERS_AVAILABLE and frame is not None
-                    and is_bfmc):
+                    and is_bfmc and mapped not in TRAFFIC_LIGHT_LABELS):
                 if not validate_detection(frame, mapped, (x1, y1, x2, y2)):
                     continue  # Rejected by filters
 
@@ -429,6 +519,8 @@ Examples:
                         help="Detection confidence threshold (default: 0.5)")
     parser.add_argument("--no-filters", action="store_true",
                         help="Disable post-detection shape/color/size filters")
+    parser.add_argument("--add-traffic-box", action="store_true",
+                        help="Add COCO traffic-light boxes on top of your selected model")
     args = parser.parse_args()
 
     if args.no_filters:
@@ -436,3 +528,5 @@ Examples:
         print("⚠️  Post-detection filters DISABLED (raw YOLO output)")
 
     run(args)
+
+
