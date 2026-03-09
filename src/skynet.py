@@ -452,6 +452,7 @@ class PlannerThread(threading.Thread):
         self._last_lane_time = 0  # timestamp of last valid lane result
         self._no_lane_timeout = 2.0  # seconds without lane → brake
         self._is_highway = False  # track whether we're on highway
+        self._recovery_until = 0  # timestamp for lane collision recovery
 
     def run(self):
         print("[Planner] Starting…")
@@ -462,6 +463,19 @@ class PlannerThread(threading.Thread):
 
         while self.state.is_running():
             now = time.time()
+
+            # ── 0. Collision Recovery Mode ────────────────────────────────────
+            if self._recovery_until > 0:
+                if now < self._recovery_until:
+                    # Keep reversing. We don't update sign/lane rules during recovery.
+                    self.state.set_command(-15, self._current_steer)
+                    time.sleep(0.05)
+                    continue
+                else:
+                    self._recovery_until = 0
+                    print("[Planner] 🔄 Recovery complete → resuming forward driving")
+                    self._current_speed = HIGHWAY_SPEED if self._is_highway else DEFAULT_SPEED
+                    self._current_steer = 0
 
             # ── 1. Sign detection (overrides everything) ──────────────────
             detection = self.state.get_detection()
@@ -492,6 +506,15 @@ class PlannerThread(threading.Thread):
                 error   = lane.get("error", 0.0)    # -1.0 (left) to +1.0 (right)
                 heading = lane.get("heading", 0.0)   # radians
                 lane_type = lane.get("lane_type", "city")
+
+                # Collision recovery trigger
+                if abs(error) > 0.85 and self._current_speed > 0 and self._rule_active_until <= 0:
+                    print(f"[Planner] ⚠️ LANE COLLISION (err={error:.2f}) → INITIATING REVERSE RECOVERY!")
+                    self._recovery_until = now + 1.2  # Reverse for 1.2s
+                    # If error > 0 (hitting right lane), steer right (+25) while reversing
+                    # This pulls the rear to the right, sweeping the front to the LEFT (away from the line)
+                    self._current_steer = 25 if error > 0 else -25
+                    continue
 
                 # Update speed based on lane type (city vs highway)
                 if lane_type == "highway" and not self._is_highway:

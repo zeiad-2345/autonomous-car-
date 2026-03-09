@@ -31,8 +31,8 @@ import numpy as np
 # ── Known track parameters ─────────────────────────────────────────────────
 LANE_WIDTH_CITY_CM     = 35.0   # cm
 LANE_WIDTH_HIGHWAY_CM  = 37.0   # cm
-LINE_WIDTH_CITY_CM     = 2.0    # cm  ← Our actual track uses ~2.5cm markings (BFMC spec is 2cm)
-LINE_WIDTH_HIGHWAY_CM  = 4.0    # cm
+LINE_WIDTH_CM          = 2.5    # cm  ← ACTUAL measured marking width (both solid & dashed)
+DASH_GAP_CM            = 4.5    # cm  ← Gap between dashes (~4.4–4.5cm measured)
 DASH_ON_CITY_CM        = 4.5    # cm
 DASH_ON_HIGHWAY_CM     = 9.0    # cm
 
