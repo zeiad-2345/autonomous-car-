@@ -53,61 +53,28 @@ graph TD
         PLANNER -->|Speed & Steer Commands| SERIAL
     end
 
-    subgraph "Low-Level Control (STM32/RP2040)"
-        EMBEDDED[raven-embedded-control C++]:::embedded
-        PID[Speed PID & Steering MPC]:::embedded
-        SAFETY[Dead Man Switch]:::embedded
+    PLANNER -->|Speed & Steer Commands| SERIAL
+end
 
-        EMBEDDED --- PID
-        EMBEDDED --- SAFETY
-    end
+subgraph "Low-Level Control (STM32/RP2040)"
+    EMBEDDED[raven-embedded-control C++]:::embedded
+    PID[Speed PID & Steering MPC]:::embedded
+    SAFETY[Dead Man Switch]:::embedded
 
-    subgraph "Simulation"
-        SIM[raven-sim Gazebo ROS1]:::sim
-    end
+    EMBEDDED --- PID
+    EMBEDDED --- SAFETY
+end
 
-    %% Connections
-    CLI -.->|"Deploys/Manages"| BRAIN
-    CLI -.->|"Flashes"| EMBEDDED
-    DASH <-->|"Socket.IO / Telemetry"| BRAIN
-    SERIAL <-->|"USB Serial (#cmds / @telemetry)"| EMBEDDED
-    SIM -.->|"Provides Camera / ROS / Telemetry"| BRAIN
-    SIM <-->|"Simulated Server"| DASH
+%% Connections
+CLI -.->|"Deploys/Manages"| BRAIN
+CLI -.->|"Flashes"| EMBEDDED
+DASH <-->|"Socket.IO / Telemetry"| BRAIN
+SERIAL <-->|"USB Serial (#cmds / @telemetry)"| EMBEDDED
 ```
 
-## 🏗️ RAVEN/Skynet Architecture (ROS 1 vs Native Python)
+## 🏗️ RAVEN/Skynet Architecture
 
-The `raven-brain-stack` utilizes a hybrid architectural approach. The core driving logic operates on a lightweight, high-speed custom **Python `multiprocessing.Queue`** framework, while specific isolated perception nodes leverage **ROS 1 Noetic**.
-
-```mermaid
-graph TD
-    subgraph ROS 1 Noetic Environment
-        G[Gazebo / Real Camera] -- /camera/rgb/image_raw --> LS[lane_segmentation.py]
-        LS -- /raven/perception/lane_mask --> TF[Task: Lateral Offset]
-        
-        note1[Used purely for specific isolated<br>perception tasks requiring ROS tools]
-    end
-
-    subgraph Native Python Multiprocessing Environment
-        C[threadCamera.py] -- Camera Queue --> SD[threadSignDetection.py]
-        SD -- SignDetected Queue --> P[threadPlanner.py]
-        P -- SpeedMotor/SteerMotor Queue --> SW[threadWrite.py]
-        SR[threadRead.py] -- ImuData Queue --> P
-        
-        note2[The core Skynet brain.<br>High speed, low overhead, purely native Python (ZeroMQ-style).]
-    end
-
-    SW -- Serial USB --> MCU[Arduino RP2040 / Nucleo]
-    MCU -- Serial USB --> SR
-
-    classDef ros fill:#22314E,stroke:#4E70A6,color:#fff
-    classDef zmq fill:#1A4024,stroke:#3D9955,color:#fff
-    classDef hw fill:#5A3612,stroke:#B46D24,color:#fff
-    
-    class G,LS,TF,note1 ros
-    class C,SD,P,SW,SR,note2 zmq
-    class MCU hw
-```
+The `raven-brain-stack` operates on a high-speed custom **Python `multiprocessing`** framework. All core components (Perception, Planning, and Serial communication) run as independent processes communicating via shared queues. This ensures low-latency execution and prevents a bottleneck in the main thread during heavy CV processing.
 
 ## 🕹️ Remote Control Support (New)
 
@@ -191,21 +158,6 @@ Filters are enabled by default. Disable with `--no-filters` for debugging.
 [Documentation](https://bosch-future-mobility-challenge-documentation.readthedocs-hosted.com/)
 
 ---
-
-## Feature: Video Stream Handler (001b)
-
-### Overview
-The `001b-video-stream-handler` branch implements the "Eyes" of the RAVEN platform for the ROS1 Noetic stack. It bridges the simulation world (Gazebo) with the computer vision stack (OpenCV).
-- **Subscribes to**: `/camera/rgb/image_raw` (Gazebo Camera)
-- **converts**: ROS `sensor_msgs/Image` -> OpenCV `numpy.ndarray` (BGR8)
-- **preview**: Displays a live feed in a "RAVEN Eye" window (Desktop only).
-
-### Run the Node
-```bash
-#  Make sure you are in the ROS environment (ros_packages/raven_vision)
-python3 ros_packages/raven_vision/src/video_stream_handler.py
-```
-*Note: A running `roscore` and Gazebo simulation are required.*
 
 ---
 
