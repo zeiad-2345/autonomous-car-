@@ -5,7 +5,7 @@ import numpy as np
 import cv2
 from picamera2 import Picamera2
 
-from Stanley_Control import *
+from control.Stanley_Control import *
 
 #####################################
 # === CONFIG ===

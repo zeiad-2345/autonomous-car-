@@ -18,6 +18,23 @@ As an importable module for skynet.py:
 import serial
 import time
 import threading
+import socket
+#####################################
+# === CONFIG ===
+LOCAL_HOST = '0.0.0.0'
+LOCAL_PORT = 1234
+#####################################
+
+#####################################
+# === Connect to local ===
+def connect_to_local():
+    local_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    print(f"Connecting to local server at {LOCAL_HOST}:{LOCAL_PORT}...")
+    local_socket.bind((LOCAL_HOST, LOCAL_PORT))
+    local_socket.listen(1)
+    print("Connected to local server!")
+    return local_socket
+#####################################
 
 SERIAL_PORT = "/dev/ttyACM0"
 # If testing on Mac, this might be "/dev/cu.usbmodem14201" or similar
@@ -180,21 +197,35 @@ def main():
     if not ctrl.start():
         return
     print("Connected. Enter 'speed angle' pairs (e.g., '20 -10') or 'exit'.\n")
-
+    ctrl.send_speed(int(0))
+    ctrl.send_steer(int(0))
+    
+    pc_socket = connect_to_local()
+    conn,addr = pc_socket.accept()
     while True:
         try:
             time.sleep(0.1)
-            user_input = input(
-                "Enter speed (-50 to 50) and angle (-25 to 25) separated by space (or 'exit'): "
-            ).strip()
-
-            if user_input.lower() == "exit":
-                break
 
             try:
-                speed_str, angle_str = user_input.split()
-                speed = int(speed_str)
-                angle = int(angle_str)
+                
+                # 4. Wait for control from PC
+                #print("[TCP] Waiting for PC control...")
+                control_data = ""
+                while '\n' not in control_data:
+                    chunk = conn.recv(1024).decode('utf-8')
+                    if not chunk:
+                        raise ConnectionError("PC server disconnected.")
+                    control_data += chunk
+
+                control_line, _ = control_data.split('\n', 1)
+                control_line = control_line.strip()
+                print(f"[TCP] Received control: {control_line}")
+                
+                
+                
+                speed_str, angle_str = control_line.split(',')
+                speed = float(speed_str)
+                angle = float(angle_str)
 
                 if not -50 <= speed <= 50:
                     print("Speed must be between -50 and 50")
@@ -203,19 +234,25 @@ def main():
                     print("Angle must be between -25 and 25")
                     continue
 
-                ctrl.send_speed(speed)
-                ctrl.send_steer(angle)
+                ctrl.send_speed(int(speed))
+                ctrl.send_steer(int(angle))
                 print(f"Sent: speed={speed}, steer={angle}")
 
-            except ValueError:
+            except ValueError as e:
+                print(e)
                 print("Invalid input format. Example: 20 -10")
 
         except KeyboardInterrupt:
-            break
-
-    ctrl.stop()
+             ctrl.send_speed(int(0))
+             ctrl.send_steer(int(0))          
+             break
+        except:
+             ctrl.send_speed(int(0))
+             ctrl.send_steer(int(0))
+             ctrl.stop()
     print("\nConnection closed.")
 
 
 if __name__ == "__main__":
     main()
+ 

@@ -36,16 +36,18 @@ graph TD
         subgraph "Perception Pipeline"
             CAMERA[Camera / Frame Receiver]:::perception
             LANEDET[Lane Detection<br>OpenCV IPM & Polyfit]:::perception
+            STANLEY[Stanley Controller<br>Cross-track & Heading Error]:::perception
             SIGNDET[Sign Detection<br>YOLOv8 + Filters]:::perception
             LOCALIZATION[Localization<br>Odometry & Map Graph]:::perception
             CAMERA --> LANEDET
+            LANEDET --> STANLEY
             CAMERA --> SIGNDET
         end
         
         PLANNER[Planner / FSM<br>Decision Logic]:::brain
         SERIAL[Serial Communication<br>Asynchronous UART]:::brain
 
-        LANEDET -->|Lateral Offset| PLANNER
+        STANLEY -->|Steer & Speed Gradients| PLANNER
         SIGNDET -->|Sign Labels| PLANNER
         LOCALIZATION <-->|Pose & Drift Correct| PLANNER
         PLANNER -->|Speed & Steer Commands| SERIAL
