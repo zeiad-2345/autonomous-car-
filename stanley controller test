@@ -1,0 +1,81 @@
+import cv2
+import numpy as np
+from gpiozero import Servo
+from time import sleep
+
+class StanleySystem:
+    def __init__(self, k=0.5, max_steer_deg=25):
+        self.k = k  # Gain: Higher = sharper turns
+        self.max_steer_rad = np.radians(max_steer_deg)
+        self.v = 1.0  # Assumed constant velocity (m/s)
+        self.meters_per_pixel = 0.002 # CALIBRATION: meters per 1 pixel
+        
+        # Smoothing filter buffer
+        self.window_size = 5
+        self.history = []
+
+    def smooth_error(self, error):
+        self.history.append(error)
+        if len(self.history) > self.window_size:
+            self.history.pop(0)
+        return sum(self.history) / len(self.history)
+
+    def calculate_steering(self, lane_x, frame_width):
+        # Calculate Cross-Track Error (CTE)
+        pixel_error = lane_x - (frame_width / 2)
+        cte = pixel_error * self.meters_per_pixel
+        
+        # Apply smoothing
+        smooth_cte = self.smooth_error(cte)
+        
+        # Stanley Formula: delta = heading_error + atan(k * cte / v)
+        # We assume heading_error is 0 for basic line following
+        heading_error = 0 
+        steer_rad = heading_error + np.arctan2(self.k * smooth_cte, self.v)
+        
+        # Clip to your 25 degree physical limit
+        steer_rad = np.clip(steer_rad, -self.max_steer_rad, self.max_steer_rad)
+        
+        # Map to Servo range (-1.0 to 1.0)
+        return steer_rad / self.max_steer_rad
+
+        
+def main():
+    # Initialize Hardware and Controller
+    servo = Servo(18) # GPIO Pin 18
+    cap = cv2.VideoCapture(0)
+    cap.set(3, 320) # Low res for Pi speed
+    cap.set(4, 240)
+    
+    # Initialize our "Bridge" architecture
+    stanley = StanleySystem(k=0.7, max_steer_deg=25)
+
+    try:
+        print("System Online. Starting Stanley Control...")
+        while True:
+            ret, frame = cap.read()
+            if not ret: break
+
+            # STEP 1: PERCEPTION (Your Code)
+            lane_center_x = your_existing_line_detection(frame)
+
+            if lane_center_x is not None:
+                # STEP 2: THINK (Stanley Controller)
+                servo_command = stanley.calculate_steering(lane_center_x, frame.shape[1])
+                
+                # STEP 3: ACT (Hardware)
+                servo.value = servo_command
+            else:
+                # Safety: Stop steering if lane is lost
+                servo.value = 0
+
+            sleep(0.02) # Run at ~50Hz
+
+    except KeyboardInterrupt:
+        print("\nShutting down...")
+    finally:
+        servo.value = 0
+        cap.release()
+
+if __name__ == "__main__":
+    main()
