@@ -27,6 +27,7 @@ import time
 import math
 import cv2
 import numpy as np
+from collections import deque
 
 # ── Known track parameters ─────────────────────────────────────────────────
 LANE_WIDTH_CITY_CM     = 35.0   # cm
@@ -37,29 +38,41 @@ DASH_ON_CITY_CM        = 4.5    # cm
 DASH_ON_HIGHWAY_CM     = 9.0    # cm
 
 # ── Image pipeline constants ───────────────────────────────────────────────
-# ROI: only look at the bottom 55% of the frame (road ahead, not sky)
-ROI_TOP_FRACTION   = 0.45
+# ROI: only look at the bottom part of the frame (road ahead, not sky)
+# Lower the top fraction to include more of the road for detection
+ROI_TOP_FRACTION   = 0.70
 # IPM (bird's-eye) warp source/destination corners (tune per camera mount)
 # These are fractions of frame width/height — adjust after calibration
 IPM_SRC = np.float32([
-    [0.15, 1.00],   # bottom-left
-    [0.85, 1.00],   # bottom-right
-    [0.58, ROI_TOP_FRACTION],  # top-right
-    [0.42, ROI_TOP_FRACTION],  # top-left
+    [0.00, 1.00],   # bottom-left
+    [1.00, 1.00],   # bottom-right
+    [0.85, ROI_TOP_FRACTION],  # top-right
+    [0.25, ROI_TOP_FRACTION],  # top-left
 ])
 IPM_DST = np.float32([
-    [0.10, 1.00],
-    [0.90, 1.00],
-    [0.90, 0.00],
-    [0.10, 0.00],
+   [0.00, 1.00],
+    [1.00, 1.00],
+    [1.00, 0.00],
+    [0.00, 0.00],
 ])
 
 # Sliding window
 N_WINDOWS     = 9
-WINDOW_MARGIN = 50    # px half-width around window centroid
-MIN_PIX       = 30    # minimum pixels to recenter window
+WINDOW_MARGIN = 70    # px half-width around window centroid (wider search)
+MIN_PIX       = 20    # minimum pixels to recenter window (relaxed)
+
+# Contour/area thresholds for the sliding-window point extraction
+CONTOUR_MIN_AREA = 30
 
 LANE_DETECT_HZ = 15   # run at 15 Hz (city: moves 1.3cm/frame; highway: 2.7cm/frame)
+
+# Lane smoothing history
+LANE_HISTORY = 10
+left_lane_history = deque(maxlen=LANE_HISTORY)
+right_lane_history = deque(maxlen=LANE_HISTORY)
+
+# Real-world lane width for offset calculation
+REAL_LANE_WIDTH_CM = 35.0
 
 
 class LaneDetectionThread(threading.Thread):
@@ -79,6 +92,24 @@ class LaneDetectionThread(threading.Thread):
         self._M = None   # IPM warp matrix (computed once from first frame)
         self._Minv = None
 
+        # State for handling detection failures
+        self.missing_counter = 0
+        self.is_in_curve = False
+        self.error_history = deque(maxlen=LANE_HISTORY)
+        self.left_history = deque(maxlen=LANE_HISTORY)
+        self.right_history = deque(maxlen=LANE_HISTORY) 
+        self.heading_history = deque(maxlen=LANE_HISTORY)
+        self.last_valid_error = 0.0
+        self.lane_width_px = None
+        # The smoothing_factor is the "coefficient" for the EMA.
+        # A higher value makes it more responsive to new data, a lower value makes it smoother.
+        self.smoothing_factor = 0.2
+        self.smoothed_error = 0.0
+        self.smoothed_heading = 0.0
+        self.smoothed_lfit = None
+        self.smoothed_rfit = None
+        # Number of frames to "coast" using memory before resetting
+        self.FAILURE_COAST_FRAMES = 15  # ~1.0s at 15Hz
     # ── Main loop ─────────────────────────────────────────────────────────
 
     def run(self):
@@ -99,10 +130,11 @@ class LaneDetectionThread(threading.Thread):
 
             try:
                 result = self._pipeline(frame)
-                self.state.set_lane(result)
+                if result is not None:
+                   self.state.set_lane(result)
             except Exception as e:
                 # Never crash the car over a detection failure
-                pass
+                print(f"[Lane] Pipeline Exception: {e}")
 
         print("[Lane] Stopped.")
 
@@ -111,7 +143,7 @@ class LaneDetectionThread(threading.Thread):
     def _pipeline(self, frame):
         """
         Returns dict:
-            {error: float, heading: float, lane_type: str, annotated: ndarray | None}
+            {error, heading, lane_type, left_fit, right_fit, Minv, frame_shape}
         """
         h, w = frame.shape[:2]
         if self._M is None:
@@ -124,19 +156,83 @@ class LaneDetectionThread(threading.Thread):
         # 2. Threshold for white lane markings
         binary = self._threshold(bird)
 
+        # Create a BGR visualization image to draw boxes on safely
+        out_img = cv2.cvtColor(binary, cv2.COLOR_GRAY2BGR)
+
         # 3. Detect lane type (city vs highway) based on line width ratio
         lane_type = self._classify_lane_type(binary)
 
         # 4. Try sliding-window, fall back to Hough
-        result = self._sliding_window(binary)
+        result = self._sliding_window(binary, out_img)
         if result is None:
-            result = self._hough_fallback(binary)
-
+            result = self._hough_fallback(binary, out_img)
+       
         if result is None:
-            return {"error": 0.0, "heading": 0.0, "lane_type": lane_type, "annotated": None}
+            print("[Lane] No lane detected in this frame.")
+            self.missing_counter += 1
+            error, heading = 0.0, 0.0  # Default safety values
+            left_fit, right_fit = None, None
 
-        error, heading, viz = result
-        return {"error": error, "heading": heading, "lane_type": lane_type, "annotated": viz}
+            if self.missing_counter >4:
+                # Short-term failure: coast using memory
+                eh = list(self.error_history)
+                hh = list(self.heading_history)
+                lh = list(self.left_history)
+                rh = list(self.right_history)
+
+                # Use frames 3-6 from history if available
+                if len(eh) >= 9: eh = eh[5:9] # type: ignore
+                if len(hh) >= 9: hh = hh[5:9] # type: ignore
+                if len(lh) >= 9: lh = lh[5:9] # type: ignore
+                if len(rh) >= 9: rh = rh[5:9] # type: ignore
+
+                # --- Calculate fallback values from sliced history ---
+                error_from_history = float(np.mean(eh)) if len(eh) > 0 else 0.0
+
+           
+                if not self.is_in_curve or error_from_history < 0.1:  # If we're likely on a straight, use generic straight fallback
+                    print("[Lane] Fallback: STRAIGHT (small historical error)")
+                    error = 0.0
+                    heading = 0.0
+                    # Provide generic straight fits for visualization
+                    
+                    left_fit = np.array([0.0, 0.0, self._w * 0.2])
+                    right_fit = np.array([0.0, 0.0, self._w * 0.85])
+                else: # Otherwise, it's a curve, so use the historical values
+                    print("[Lane] Fallback: CURVE (large error)")
+                    error = error_from_history
+                    if len(hh) > 0: heading = float(np.mean(hh))
+                    if len(lh) > 0: left_fit = np.mean(lh, axis=0)
+                    if len(rh) > 0: right_fit = np.mean(rh, axis=0)
+            # else: Long-term failure, use default error=0, heading=0, fits=None
+
+            return {"error": float(error), "heading": float(heading), "lane_type": lane_type,
+                    "left_fit": left_fit, "right_fit": right_fit,
+                    "Minv": self._Minv, "frame_shape": (h, w), "binary": out_img}
+        else:
+            # --- SUCCESSFUL DETECTION ---
+            self.missing_counter = 0
+            error, heading, lfit, rfit = result
+
+            # Only trust sliding window (high confidence) to update the memory
+            if lfit is not None or rfit is not None:
+                self.error_history.append(error)
+                self.heading_history.append(heading)
+                if lfit is not None:
+                    self.left_history.append(lfit)
+                if rfit is not None:
+                    self.right_history.append(rfit)
+
+            # Determine if we are in a curve from the polynomial fit.
+            l_curv = abs(lfit[0]) if lfit is not None and len(lfit) == 3 else 0
+            r_curv = abs(rfit[0]) if rfit is not None and len(rfit) == 3 else 0
+            CURVATURE_THRESHOLD = 1e-4
+            
+            self.is_in_curve = l_curv > CURVATURE_THRESHOLD or r_curv > CURVATURE_THRESHOLD
+            
+            return {"error": float(error), "heading": float(heading), "lane_type": lane_type,
+                "left_fit": lfit, "right_fit": rfit,
+                "Minv": self._Minv, "frame_shape": (h, w), "binary": out_img}
 
     # ── Step 1: IPM warp ──────────────────────────────────────────────────
 
@@ -180,53 +276,113 @@ class LaneDetectionThread(threading.Thread):
 
     # ── Step 4a: Sliding window ───────────────────────────────────────────
 
-    def _sliding_window(self, binary):
+    def _sliding_window(self, binary, out_img=None):
         """
         Classic sliding-window lane finder.
         Returns (lateral_error, heading_error, viz_img) or None.
         """
+      
         h, w = binary.shape
         # Histogram of bottom half to find starting points
         hist = binary[h // 2:, :].sum(axis=0).astype(np.float32)
-        mid  = w // 2
+        
+        # Dynamically shift the histogram split based on history to catch sharp curves
+        mid = w // 2
+        if len(self.error_history) > 0:
+            last_error = self.error_history[-1]
+            # Shift by up to 35% of the screen width depending on how hard we are turning
+            shift = int(last_error * (w * 0.35))
+            mid = max(w // 4, min(3 * w // 4, mid + shift))
+            
         lx_base = int(np.argmax(hist[:mid]))
         rx_base = int(mid + np.argmax(hist[mid:]))
 
-        win_h = h // N_WINDOWS
-        lx_cur, rx_cur = lx_base, rx_base
-        l_pix, r_pix = [], []
+        l_pix, l_y = [], []
+        r_pix, r_y = [], []
+        valid_l_windows=0
+        valid_r_windows=0
+        window_height = 40
+        y = h
+        while y > 0:
+            y0 = max(0, y - window_height)
 
-        nz = binary.nonzero()
-        nz_y, nz_x = np.array(nz[0]), np.array(nz[1])
-
-        for win in range(N_WINDOWS):
-            y_lo = h - (win + 1) * win_h
-            y_hi = h - win * win_h
-
+            l_added = False
             # Left window
-            good_l = ((nz_y >= y_lo) & (nz_y < y_hi) &
-                      (nz_x >= lx_cur - WINDOW_MARGIN) &
-                      (nz_x <  lx_cur + WINDOW_MARGIN)).nonzero()[0]
+            x1 = max(0, lx_base - WINDOW_MARGIN)
+            x2 = min(w, lx_base + WINDOW_MARGIN)
+            img = binary[y0:y, x1:x2]
+            contours, _ = cv2.findContours(img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            cxx = []
+            for contour in contours:
+                if cv2.contourArea(contour) < CONTOUR_MIN_AREA:
+                    continue
+                m = cv2.moments(contour)
+                if m.get('m00', 0) != 0:
+                    cx = int(m['m10'] / m['m00'])
+                    cxx.append(cx)
+            if len(cxx) > 0:
+                avg_cx = int(np.mean(cxx))
+                lx_base = x1 + avg_cx
+                l_pix.append(lx_base)
+                l_y.append(y0 + window_height // 2)
+                valid_l_windows += 1
+                l_added = True
+
             # Right window
-            good_r = ((nz_y >= y_lo) & (nz_y < y_hi) &
-                      (nz_x >= rx_cur - WINDOW_MARGIN) &
-                      (nz_x <  rx_cur + WINDOW_MARGIN)).nonzero()[0]
+            r_added = False
+            xr1 = max(0, rx_base - WINDOW_MARGIN)
+            xr2 = min(w, rx_base + WINDOW_MARGIN)
+            img = binary[y0:y, xr1:xr2]
+            contours, _ = cv2.findContours(img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            cxx = []
+            for contour in contours:
+                if cv2.contourArea(contour) < CONTOUR_MIN_AREA:
+                    continue
+                m = cv2.moments(contour)
+                if m.get('m00', 0) != 0:
+                    cx = int(m['m10'] / m['m00'])
+                    cxx.append(cx)
+            if len(cxx) > 0:
+                avg_cx = int(np.mean(cxx))
+                rx_base = xr1 + avg_cx
+                r_pix.append(rx_base)
+                r_y.append(y0 + window_height // 2)
+                valid_r_windows += 1
+                r_added = True
 
-            l_pix.extend(good_l)
-            r_pix.extend(good_r)
+            # Remove points if the detected lane width is very narrow
+            if l_added and r_added:
+                if (rx_base - lx_base) < (w * 0.4):  # threshold: less than 40% of frame width
+                    l_pix.pop()
+                    l_y.pop()
+                    valid_l_windows -= 1
+                    r_pix.pop()
+                    r_y.pop()
+                    valid_r_windows -= 1
+                    # Invalidate so we don't draw the dropped points
+                    l_added = False
+                    r_added = False
 
-            if len(good_l) >= MIN_PIX:
-                lx_cur = int(np.mean(nz_x[good_l]))
-            if len(good_r) >= MIN_PIX:
-                rx_cur = int(np.mean(nz_x[good_r]))
+            if out_img is not None:
+                if l_added:
+                    cv2.rectangle(out_img, (max(0, l_pix[-1] - WINDOW_MARGIN), y0), (min(w, l_pix[-1] + WINDOW_MARGIN), y), (255, 0, 0), 2)
+                    cv2.circle(out_img, (l_pix[-1], y0 + window_height // 2), 4, (0, 0, 255), -1)
+                if r_added:
+                    cv2.rectangle(out_img, (max(0, r_pix[-1] - WINDOW_MARGIN), y0), (min(w, r_pix[-1] + WINDOW_MARGIN), y), (255, 0, 0), 2)
+                    cv2.circle(out_img, (r_pix[-1], y0 + window_height // 2), 4, (0, 255, 0), -1)
 
-        if len(l_pix) < MIN_PIX * 2 and len(r_pix) < MIN_PIX * 2:
-            return None  # Not enough evidence
+            y -= window_height
+        
+        # After scanning all windows, ensure we found sufficient points
+        if valid_l_windows < 3 and valid_r_windows < 3:
+            return None
 
-        l_pix, r_pix = np.array(l_pix), np.array(r_pix)
-        ly, lx = nz_y[l_pix], nz_x[l_pix]
-        ry, rx = nz_y[r_pix], nz_x[r_pix]
-
+        lx = np.array(l_pix)
+        ly = np.array(l_y)
+        rx = np.array(r_pix)
+        ry = np.array(r_y)
+       
+            
         # Fit 2nd-degree polynomial y = f(x) → but we fit x = f(y) for near-vertical lanes
         try:
             if len(lx) >= 3:
@@ -240,21 +396,45 @@ class LaneDetectionThread(threading.Thread):
         except np.linalg.LinAlgError:
             return None
 
+        # If only one side was found, generate a hypothetical opposite fit
+        # by horizontally shifting the detected polynomial. The shift is
+        # estimated as a fraction of image width (heuristic) so we can
+        # still render a plausible lane when one side is occluded.
+        # The assumed real lane width is REAL_LANE_WIDTH_CM but without
+        # camera calibration we convert it to pixels heuristically.
+        
+        if lfit is not None and rfit is None:
+            shift_px = float(w) * 0.80  # heuristic pixel lane width
+            # Copy coefficients and add shift to constant term
+            rfit = np.array(lfit, copy=True)
+            if rfit.size == 3:
+                rfit[2] = rfit[2] + shift_px
+            elif rfit.size == 2:
+                rfit[1] = rfit[1] + shift_px
+        elif rfit is not None and lfit is None:
+            shift_px = float(w) * 0.80
+            lfit = np.array(rfit, copy=True)
+            if lfit.size == 3:
+                lfit[2] = lfit[2] - shift_px
+            elif lfit.size == 2:
+                lfit[1] = lfit[1] - shift_px
+       
         # Lane centre at bottom of image
         y_eval = float(h)
-        if lfit is not None and rfit is not None:
+        if lfit is not None and rfit is not None :
             l_x_bottom = np.polyval(lfit, y_eval)
             r_x_bottom = np.polyval(rfit, y_eval)
+            
             lane_centre = (l_x_bottom + r_x_bottom) / 2.0
         elif lfit is not None:
             # Only left lane visible — assume standard lane width
-            lane_centre = np.polyval(lfit, y_eval) + w * 0.35 / 2.0
+            lane_centre = np.polyval(lfit, y_eval) + w * 0.40 / 2.0
         elif rfit is not None:
             lane_centre = np.polyval(rfit, y_eval) - w * 0.35 / 2.0
         else:
             return None
 
-        img_centre  = w / 2.0
+        img_centre = w / 2.0
         # Normalised error: -1 = car at left edge, +1 = car at right edge
         error = (lane_centre - img_centre) / (w / 2.0)
 
@@ -262,22 +442,26 @@ class LaneDetectionThread(threading.Thread):
         if lfit is not None and rfit is not None:
             l_slope = float(2 * lfit[0] * y_eval + lfit[1])
             r_slope = float(2 * rfit[0] * y_eval + rfit[1])
-            slope   = (l_slope + r_slope) / 2.0
+            slope = (l_slope + r_slope) / 2.0
         elif lfit is not None:
             slope = float(2 * lfit[0] * y_eval + lfit[1])
         else:
             slope = float(2 * rfit[0] * y_eval + rfit[1])
 
         heading = math.atan2(slope, 1.0)  # radians
+        if lfit is None and rfit is None:
+            return None
 
-        return error, heading, None  # viz skipped for performance
+
+        return error, heading, lfit, rfit
 
     # ── Step 4b: Hough fallback ───────────────────────────────────────────
 
-    def _hough_fallback(self, binary):
+    def _hough_fallback(self, binary, out_img=None):
         """
         Simple Hough-line approach as a fallback when sliding window has insufficient pixels.
         """
+       
         edges = cv2.Canny(binary, 50, 150)
         lines = cv2.HoughLinesP(edges, 1, np.pi / 180,
                                 threshold=30, minLineLength=30, maxLineGap=20)
@@ -295,6 +479,10 @@ class LaneDetectionThread(threading.Thread):
             # Filter near-horizontal lines
             if abs(slope) < 0.3:
                 continue
+                
+            if out_img is not None:
+                cv2.line(out_img, (x1, y1), (x2, y2), (0, 255, 255), 2)
+                
             midx = (x1 + x2) / 2
             if midx < w / 2:
                 left_x.append(midx)
@@ -316,4 +504,122 @@ class LaneDetectionThread(threading.Thread):
 
         error   = (lane_centre - w / 2.0) / (w / 2.0)
         heading = 0.0  # Hough fallback does not compute heading reliably
-        return error, heading, None
+        return error, heading, None, None
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Visualization helpers  (called from main display loop, NOT from the thread)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def draw_roi_overlay(frame):
+    """Draw the IPM source trapezoid on the frame."""
+    h, w = frame.shape[:2]
+    pts = (IPM_SRC * np.float32([w, h])).astype(np.int32)
+    pts_reshaped = pts.reshape((-1, 1, 2))
+    overlay = frame.copy()
+    cv2.fillPoly(overlay, [pts_reshaped], (120, 120, 120))
+    combined = cv2.addWeighted(overlay, 0.3, frame, 0.7, 0)
+    cv2.polylines(combined, [pts_reshaped], True, (0, 0, 255), 2)
+    return combined
+
+
+def draw_dashed_line(img, x_vals, y_vals, color=(0, 0, 0), thickness=3, dash_len=10, gap_len=10):
+    """Draw a dashed line given arrays of x and y coordinates."""
+    n = len(x_vals)
+    i = 0
+    while i + dash_len < n:
+        pt1 = (int(x_vals[i]), int(y_vals[i]))
+        pt2 = (int(x_vals[i + dash_len]), int(y_vals[i + dash_len]))
+        cv2.line(img, pt1, pt2, color, thickness)
+        i += dash_len + gap_len
+
+
+def draw_lanes(frame, left_fit, right_fit, Minv):
+    """
+    Draw green lane fill, blue boundary lines, and dashed center line.
+    Uses the thread's polynomial fits + inverse perspective matrix.
+    """
+    if left_fit is None or right_fit is None:
+        return frame
+    if Minv is None:
+        return frame
+
+    h, w = frame.shape[:2]
+    ploty = np.linspace(0, h - 1, h)
+    overlay = np.zeros_like(frame)
+
+    leftx = np.polyval(left_fit, ploty)
+    rightx = np.polyval(right_fit, ploty)
+
+    # Smooth with history
+    left_lane_history.append(leftx)
+    right_lane_history.append(rightx)
+    leftx_smooth = np.mean(left_lane_history, axis=0)
+    rightx_smooth = np.mean(right_lane_history, axis=0)
+
+    # Green fill between lanes
+    pts_left = np.vstack([leftx_smooth, ploty]).T.astype(np.float32).reshape(-1, 1, 2)
+    pts_right = np.flipud(np.vstack([rightx_smooth, ploty]).T.astype(np.float32)).reshape(-1, 1, 2)
+    lane_pts = np.vstack([pts_left, pts_right])
+
+    lane_pts_warped = cv2.perspectiveTransform(lane_pts, Minv)
+    cv2.fillPoly(overlay, [np.int32(lane_pts_warped)], (0, 255, 0))
+
+    # Blue boundary lines
+    left_line_warped = cv2.perspectiveTransform(pts_left, Minv)
+    right_line_warped = cv2.perspectiveTransform(pts_right, Minv)
+    cv2.polylines(overlay, [np.int32(left_line_warped)], False, (255, 0, 0), 4)
+    cv2.polylines(overlay, [np.int32(right_line_warped)], False, (255, 0, 0), 4)
+
+    # Dashed center line
+    centerx = (leftx_smooth + rightx_smooth) / 2
+    center_pts = np.vstack([centerx, ploty]).T.astype(np.float32).reshape(-1, 1, 2)
+    center_pts_warped = cv2.perspectiveTransform(center_pts, Minv)
+    draw_dashed_line(overlay, center_pts_warped[:, 0, 0], center_pts_warped[:, 0, 1])
+
+    result = cv2.addWeighted(frame, 1, overlay, 0.7, 0)
+    return result
+
+
+def draw_lane_hud(frame, lane_result):
+    """
+    Draw full lane HUD on frame using the thread's result dict.
+    Shows: offset in cm, heading, lane type, normalised error.
+    """
+    if lane_result is None:
+        cv2.putText(frame, "Lane: no data", (30, 50),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 200, 255), 2)
+        return frame
+
+    error = lane_result.get("error", 0.0)
+    heading = lane_result.get("heading", 0.0)
+    lane_type = lane_result.get("lane_type", "unknown")
+    left_fit = lane_result.get("left_fit")
+    right_fit = lane_result.get("right_fit")
+    frame_shape = lane_result.get("frame_shape", (480, 640))
+
+    heading_deg = math.degrees(heading)
+
+    # Compute offset in cm if we have both fits
+    offset_cm = 0.0
+    if left_fit is not None and right_fit is not None:
+        y_eval = float(frame_shape[0])
+        leftx = np.polyval(left_fit, y_eval)
+        rightx = np.polyval(right_fit, y_eval)
+        lane_width_px = rightx - leftx
+        if lane_width_px > 0:
+            cm_per_px = REAL_LANE_WIDTH_CM / lane_width_px
+            lane_centre = (leftx + rightx) / 2.0
+            car_centre = frame_shape[1] / 2.0
+            offset_cm = (car_centre - lane_centre) * cm_per_px
+
+    cv2.putText(frame, f"Offset: {offset_cm:.2f} cm", (30, 50),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+    cv2.putText(frame, f"Heading: {heading_deg:.2f} deg", (30, 80),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+    cv2.putText(frame, f"Lane: {lane_type}", (30, 110),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+    cv2.putText(frame, f"Error: {error:+.3f}", (30, 140),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+
+    return frame

@@ -6,8 +6,17 @@ import socket
 from collections import deque
 import math
 import warnings
+import argparse
 
-warnings.simplefilter('ignore', np.RankWarning)
+try:
+    _rank_warning = np.RankWarning
+except AttributeError:
+    try:
+        from numpy.exceptions import RankWarning as _rank_warning
+    except Exception:
+        _rank_warning = RuntimeWarning
+
+warnings.simplefilter('ignore', _rank_warning)
 
 #####################################
 # === Configuration ===
@@ -316,6 +325,50 @@ def main(args=None):
         cv2.destroyAllWindows()
         print("Connection Terminated!")
 
+
+def run_webcam(camera_index=0):
+    cap = cv2.VideoCapture(camera_index)
+    if not cap.isOpened():
+        print(f"[WEBCAM] Failed to open camera index {camera_index}")
+        return
+
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
+    print(f"[WEBCAM] Running lane detection on camera index {camera_index} (press q to quit)")
+
+    try:
+        while True:
+            ok, frame = cap.read()
+            if not ok or frame is None:
+                print("[WEBCAM] Frame read failed.")
+                break
+
+            offset, angle, lane_type, radius = Perception_Code(frame)
+            print("offset_cm:", round(offset, 2), "angle_deg:", round(angle, 2),
+                  "lane_type:", lane_type, "radius_m:", round(radius, 2))
+
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+    except KeyboardInterrupt:
+        print("\n[WEBCAM] Interrupted by user.")
+    finally:
+        cap.release()
+        cv2.destroyAllWindows()
+        print("[WEBCAM] Stopped.")
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Standalone lane detection")
+    parser.add_argument("--webcam", action="store_true",
+                        help="Run lane detection from local webcam instead of TCP socket")
+    parser.add_argument("--camera-index", type=int, default=0,
+                        help="OpenCV webcam index (default: 0)")
+    return parser.parse_args()
+
 #####################################
 if __name__ == '__main__':
-    main()
+    args = parse_args()
+    if args.webcam:
+        run_webcam(args.camera_index)
+    else:
+        main()

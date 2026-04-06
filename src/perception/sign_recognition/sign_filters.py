@@ -55,22 +55,22 @@ SIGN_FILTERS = {
         "aspect_tol": 0.5,
         # Red in HSV wraps around 0°/180°, so we need two ranges
         "hsv_ranges": [
-            (0, 50, 50, 10, 255, 255),      # Red low end
-            (170, 50, 50, 180, 255, 255),    # Red high end
+            (0, 30, 20, 12, 255, 255),      # Red low end (wider, lower S/V)
+            (170, 30, 20, 179, 255, 255),    # Red high end (wider, lower S/V)
         ],
-        "color_min": 0.03,
-        "min_area_px": 200,
+        "color_min": 0.02,
+        "min_area_px": 150,
         "max_area_frac": 0.40,
     },
     "no_entry": {
         "aspect_ratio": 1.0,
         "aspect_tol": 0.5,
         "hsv_ranges": [
-            (0, 50, 50, 10, 255, 255),
-            (170, 50, 50, 180, 255, 255),
+            (0, 30, 20, 12, 255, 255),
+            (170, 30, 20, 179, 255, 255),
         ],
-        "color_min": 0.03,
-        "min_area_px": 200,
+        "color_min": 0.02,
+        "min_area_px": 150,
         "max_area_frac": 0.40,
     },
     "parking": {
@@ -143,51 +143,17 @@ SIGN_FILTERS = {
         "min_area_px": 150,
         "max_area_frac": 0.40,
     },
-    
-    "green": {
-       "aspect_ratio": 1.8,
-        "aspect_tol": 1.0,
+    "pedestrian": { # Rules for a yellow diamond priority sign
+        "aspect_ratio": 2.5,
+        "aspect_tol": 5.0,
         "hsv_ranges": [
-            (35, 50, 50, 90, 255, 255),
+      # Yellow / Orange
         ],
-        "color_min": 0.02,
-        "min_area_px": 80,
-        "max_area_frac": 0.20,
+        "color_min": 0.00,
+        "min_area_px": 3500,
+        "max_area_frac": 0.40,
     },
-    "red": {
-        "aspect_ratio": 1.8,
-        "aspect_tol": 1.0,
-        "hsv_ranges": [
-            (35, 50, 50, 90, 255, 255),   # Blue-Green range
-        ],
-        "color_min": 0.02,
-        "min_area_px": 80,
-        "max_area_frac": 0.20,
-    },
-    "yellow": {
-       "aspect_ratio": 1.8,
-        "aspect_tol": 1.0,
-        "hsv_ranges": [
-            (15, 50, 50, 40, 255, 255),
-        ],
-        "color_min": 0.02,
-        "min_area_px": 80,
-        "max_area_frac": 0.20,
-    },
-    "redandyellow":{
-        "aspect_ratio": 1.8,
-        "aspect_tol": 1.0,
-        "hsv_ranges": [
-            (0, 50, 50, 10, 255, 255),
-            (170, 50, 50, 180, 255, 255),
-            (15, 50, 50, 40, 255, 255),
-        ],
-        "color_min": 0.03,
-        "min_area_px": 80,
-        "max_area_frac": 0.20,
-    },
-    
-    
+   
     
 }
 
@@ -249,10 +215,17 @@ def _check_dominant_color(frame, bbox, hsv_ranges, min_fraction):
         mask = cv2.inRange(hsv, lower, upper)
         combined_mask = cv2.bitwise_or(combined_mask, mask)
 
+    # Denoise the combined mask to avoid speckle triggering the color test
+    if combined_mask.size > 0:
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        combined_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_OPEN, kernel)
+        combined_mask = cv2.medianBlur(combined_mask, 5)
+
     matching_pixels = cv2.countNonZero(combined_mask)
     fraction = matching_pixels / total_pixels
 
     return fraction >= min_fraction
+
 
 
 def _check_size(bbox, frame_shape, min_area_px, max_area_frac):
