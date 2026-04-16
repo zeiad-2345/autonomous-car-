@@ -60,7 +60,7 @@ def _draw_lane_info(frame, lane_result):
     return frame
 
 
-def run_live(model_path: str, conf: float, webcam: bool, source: Optional[str], add_traffic_box: bool, state: Optional[SharedState] = None) -> None:
+def run_live(model_path: str, conf: float, webcam: bool, source: Optional[str], add_traffic_box: bool, state: Optional[SharedState] = None, remote: bool = False) -> None:
     model_file = Path(model_path)
     if not model_file.exists():
         print(f"❌ Model not found: {model_path}")
@@ -90,7 +90,12 @@ def run_live(model_path: str, conf: float, webcam: bool, source: Optional[str], 
     else:
         print("[multi] Lane detection not available.")
 
-    if source:
+    cap = None
+    using_video_file = False
+
+    if remote:
+        print("[multi] Remote mode — reading frames from SharedState (TCP bridge)")
+    elif source:
         cap = cv2.VideoCapture(source)
         if not cap.isOpened():
             print(f"❌ Cannot open source: {source}")
@@ -123,22 +128,43 @@ def run_live(model_path: str, conf: float, webcam: bool, source: Optional[str], 
     else:
         wait_ms = 1
 
+    _last_frame_id = None   # track frame identity to avoid re-processing stale frames
+
+    curve_start_time = None
+    is_in_curve_display = False
+
     try:
         while True:
-            ok, frame = cap.read()
-            if not ok:
-                if using_video_file:
+            if cap is not None:
+                # Local mode: read from camera / video file
+                ok, frame = cap.read()
+                if not ok:
+                    if using_video_file:
+                        break
+                    continue
+
+                # Resize large frames for speed
+                h, w = frame.shape[:2]
+                if w > MAX_WIDTH:
+                    scale = MAX_WIDTH / w
+                    frame = cv2.resize(frame, (MAX_WIDTH, int(h * scale)))
+
+                # Share frame for both threads via SharedState
+                state.set_latest_frame(frame.copy())
+            else:
+                # Remote mode: frames arrive via SharedState from TCP bridge
+                if not state.is_running():
                     break
-                continue
+                frame = state.get_latest_frame()
+                if frame is None:
+                    time.sleep(0.01)
+                    continue
+                # Skip if same frame object (no new frame yet)
+                if frame is _last_frame_id:
+                    time.sleep(0.005)
+                    continue
+                _last_frame_id = frame
 
-            # Resize large frames for speed
-            h, w = frame.shape[:2]
-            if w > MAX_WIDTH:
-                scale = MAX_WIDTH / w
-                frame = cv2.resize(frame, (MAX_WIDTH, int(h * scale)))
-
-            # Share frame for both threads via SharedState
-            state.set_latest_frame(frame.copy())
             frame_id += 1
 
             shown = frame
@@ -170,6 +196,28 @@ def run_live(model_path: str, conf: float, webcam: bool, source: Optional[str], 
                     if binary_view is not None:
                        cv2.imshow("Lane Binary View", binary_view)
                 shown = draw_lane_hud(shown, lane_result)
+
+                # ── CURVE VS STRAIGHT LOGIC (Window HUD) ──
+                if lane_result is not None:
+                    hud_error = lane_result.get("error", 0.0)
+                    if abs(hud_error) > 0.55  :
+                        if curve_start_time is None:
+                            curve_start_time = time.time()
+                        elif time.time() - curve_start_time >= .30:
+                            is_in_curve_display = True
+                    else:
+                        curve_start_time = None
+                        is_in_curve_display = False
+
+                    # Send the timer-confirmed curve state to SharedState for skynet to use
+                    state.set_curve_mode(is_in_curve_display)
+
+                    if is_in_curve_display:
+                        cv2.putText(shown, f"IN CURVE (Err: {hud_error:.2f})", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+                    else:
+                        cv2.putText(shown, f"STRAIGHT (Err: {hud_error:.2f})", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+                # ──────────────────────────────────────────
+
             fps_count += 1
             dt = time.time() - fps_t0
             if dt >= 1.0:
@@ -184,7 +232,8 @@ def run_live(model_path: str, conf: float, webcam: bool, source: Optional[str], 
                 break
     finally:
         state.shutdown()
-        cap.release()
+        if cap is not None:
+            cap.release()
         cv2.destroyAllWindows()
 
 

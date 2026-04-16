@@ -5,11 +5,11 @@ import numpy as np
 import cv2
 from picamera2 import Picamera2
 
-from control.Stanley_Control import *
+from control.Stanley_Control import Control_Code
 
 #####################################
 # === CONFIG ===
-PC_HOST = '192.168.1.164'  # Change as needed
+PC_HOST = '172.28.27.52'  # <-- UPDATE THIS TO YOUR LAPTOP'S IP ADDRESS
 PC_PORT = 4000
 
 LOCAL_HOST = '0.0.0.0'
@@ -63,21 +63,21 @@ def main(args=None):
             # Wait for server request
             request = pc_socket.recv(1)
             if not request or request != b'F':
-            	print("[CLIENT] Invalid or no frame request.")
-            	break
-            
-            #Capture Pi Frame
+                print("[CLIENT] Invalid or no frame request.")
+                break
+
+            # Capture Pi Frame
             frame = cam.capture_array()
-            
+
             # === Resize frame ===
             frame = cv2.resize(frame, (FRAME_WIDTH, FRAME_HEIGHT))
-            
+
             # Encode as JPEG
             ret, jpeg = cv2.imencode('.jpg', frame)
             if not ret:
-            	print("[CLIENT] JPEG encoding failed.")
-            	break
-            
+                print("[CLIENT] JPEG encoding failed.")
+                break
+
             image_bytes = jpeg.tobytes()
             image_len = len(image_bytes)
             

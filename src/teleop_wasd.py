@@ -156,9 +156,9 @@ class ManualTeleop:
             elif ch == 's':
                 self.speed = max(-50, self.speed - 5)
             elif ch == 'a':
-                self.steer = max(-25, self.steer - 5)
+                self.steer = max(-120, self.steer - 24)
             elif ch == 'd':
-                self.steer = min(25, self.steer + 5)
+                self.steer = min(120, self.steer + 24)
             elif ch == ' ' or ch == 'x':
                 self.speed = 0
                 self.steer = 0

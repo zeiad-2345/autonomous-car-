@@ -47,10 +47,10 @@ IPM_SRC = np.float32([
     [0.00, 1.00],   # bottom-left
     [1.00, 1.00],   # bottom-right
     [0.85, ROI_TOP_FRACTION],  # top-right
-    [0.25, ROI_TOP_FRACTION],  # top-left
+    [0.23, ROI_TOP_FRACTION],  # top-left
 ])
 IPM_DST = np.float32([
-   [0.00, 1.00],
+    [0.00, 1.00],
     [1.00, 1.00],
     [1.00, 0.00],
     [0.00, 0.00],
@@ -73,6 +73,15 @@ right_lane_history = deque(maxlen=LANE_HISTORY)
 
 # Real-world lane width for offset calculation
 REAL_LANE_WIDTH_CM = 35.0
+
+# Camera horizontal offset: camera is slightly LEFT of car center.
+# Positive value shifts the assumed car position to the RIGHT in the image.
+# 0.05 = 5% of image width (~32px on 640px frame). Tune on track.
+CAMERA_CENTER_OFFSET = -0.25
+
+# Look-ahead: evaluate lane centre at this fraction of the warped image height
+# 1.0 = right under the car (reactive only), 0.5 = midway (anticipatory)
+LOOKAHEAD_Y_FRAC = 0.55
 
 
 class LaneDetectionThread(threading.Thread):
@@ -99,6 +108,11 @@ class LaneDetectionThread(threading.Thread):
         self.left_history = deque(maxlen=LANE_HISTORY)
         self.right_history = deque(maxlen=LANE_HISTORY) 
         self.heading_history = deque(maxlen=LANE_HISTORY)
+
+        # EMA smoothing for output stability
+        self._ema_alpha = 0.4   # 0.0 = full smoothing, 1.0 = no smoothing
+        self._ema_error = 0.0
+        self._ema_heading = 0.0
         self.last_valid_error = 0.0
         self.lane_width_px = None
         # The smoothing_factor is the "coefficient" for the EMA.
@@ -230,8 +244,20 @@ class LaneDetectionThread(threading.Thread):
             
             self.is_in_curve = l_curv > CURVATURE_THRESHOLD or r_curv > CURVATURE_THRESHOLD
             
-            return {"error": float(error), "heading": float(heading), "lane_type": lane_type,
-                "left_fit": lfit, "right_fit": rfit,
+            # EMA smoothing to reduce jitter
+            
+            # In straight lines, use heavy smoothing (alpha=0.15) to create a "saved fixed center"
+            # In curves, use light smoothing (alpha=0.8) to stay responsive
+            alpha = 0.8 if self.is_in_curve else 0.15
+            
+            if self.smoothed_error == 0.0 and self.smoothed_heading == 0.0:
+                self.smoothed_error, self.smoothed_heading = error, heading
+            else:
+                self.smoothed_error = (alpha * error) + ((1.0 - alpha) * self.smoothed_error)
+                self.smoothed_heading = (alpha * heading) + ((1.0 - alpha) * self.smoothed_heading)
+
+            return {"error": float(self.smoothed_error), "heading": float(self.smoothed_heading), "lane_type": lane_type,       
+            "left_fit": lfit, "right_fit": rfit,
                 "Minv": self._Minv, "frame_shape": (h, w), "binary": out_img}
 
     # ── Step 1: IPM warp ──────────────────────────────────────────────────
@@ -404,7 +430,7 @@ class LaneDetectionThread(threading.Thread):
         # camera calibration we convert it to pixels heuristically.
         
         if lfit is not None and rfit is None:
-            shift_px = float(w) * 0.80  # heuristic pixel lane width
+            shift_px = float(w) * 1.00  # heuristic pixel lane width
             # Copy coefficients and add shift to constant term
             rfit = np.array(lfit, copy=True)
             if rfit.size == 3:
@@ -412,29 +438,30 @@ class LaneDetectionThread(threading.Thread):
             elif rfit.size == 2:
                 rfit[1] = rfit[1] + shift_px
         elif rfit is not None and lfit is None:
-            shift_px = float(w) * 0.80
+            shift_px = float(w) * 1.00
             lfit = np.array(rfit, copy=True)
             if lfit.size == 3:
                 lfit[2] = lfit[2] - shift_px
             elif lfit.size == 2:
                 lfit[1] = lfit[1] - shift_px
        
-        # Lane centre at bottom of image
-        y_eval = float(h)
+        # Lane centre at LOOK-AHEAD point (not bottom — gives time to react)
+        y_eval = float(h) 
         if lfit is not None and rfit is not None :
             l_x_bottom = np.polyval(lfit, y_eval)
             r_x_bottom = np.polyval(rfit, y_eval)
             
             lane_centre = (l_x_bottom + r_x_bottom) / 2.0
         elif lfit is not None:
-            # Only left lane visible — assume standard lane width
-            lane_centre = np.polyval(lfit, y_eval) + w * 0.40 / 2.0
+            # Only left lane visible — shift center further right
+            lane_centre = np.polyval(lfit, y_eval) + w * 0.90/2.0
         elif rfit is not None:
-            lane_centre = np.polyval(rfit, y_eval) - w * 0.35 / 2.0
+            # Only right lane visible — shift center further left
+            lane_centre = np.polyval(rfit, y_eval) - w * 0.90/2.0
         else:
             return None
 
-        img_centre = w / 2.0
+        img_centre = (w / 2.0) + (w * CAMERA_CENTER_OFFSET)  # shift target to the right, moves car left
         # Normalised error: -1 = car at left edge, +1 = car at right edge
         error = (lane_centre - img_centre) / (w / 2.0)
 
@@ -498,11 +525,12 @@ class LaneDetectionThread(threading.Thread):
         if l_centre and r_centre:
             lane_centre = (l_centre + r_centre) / 2.0
         elif l_centre:
-            lane_centre = l_centre + w * 0.175
+            lane_centre = l_centre + w * 0.45
         else:
-            lane_centre = r_centre - w * 0.175
+            lane_centre = r_centre - w * 0.45
 
-        error   = (lane_centre - w / 2.0) / (w / 2.0)
+        img_centre = (w / 2.0) + (w * CAMERA_CENTER_OFFSET)
+        error   = (lane_centre - img_centre) / (w / 2.0)
         heading = 0.0  # Hough fallback does not compute heading reliably
         return error, heading, None, None
 
@@ -610,7 +638,7 @@ def draw_lane_hud(frame, lane_result):
         if lane_width_px > 0:
             cm_per_px = REAL_LANE_WIDTH_CM / lane_width_px
             lane_centre = (leftx + rightx) / 2.0
-            car_centre = frame_shape[1] / 2.0
+            car_centre = (frame_shape[1] / 2.0) + (frame_shape[1] * CAMERA_CENTER_OFFSET)
             offset_cm = (car_centre - lane_centre) * cm_per_px
 
     cv2.putText(frame, f"Offset: {offset_cm:.2f} cm", (30, 50),

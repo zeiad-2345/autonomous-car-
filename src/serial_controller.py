@@ -128,12 +128,43 @@ class SerialController:
         print("[Serial] Port closed.")
 
     def send_speed(self, value: int):
-        """Send a speed command. Value: -50 to 50."""
-        self._send("speed", value)
+        """
+        Send a motor command. value: -50 to 50.
+        Positive  → DC:FORWARD:{pwm}\n
+        Negative  → DC:BACKWARD:{pwm}\n
+        Zero      → DC:STOP\n
+        PWM is scaled from the 0–50 input range to 0–255.
+        """
+        if not self.is_connected():
+            return
+        pwm = int(abs(value) / 50 * 255)
+        if value > 0:
+            command = f"DC:FORWARD:{pwm}\n"
+        elif value < 0:
+            command = f"DC:BACKWARD:{pwm}\n"
+        else:
+            command = "DC:STOP\n"
+        with self._lock:
+            try:
+                self._arduino.write(command.encode())
+                print(f"[Serial] TX {command.strip()}")
+            except Exception as e:
+                print(f"[Serial] Write error: {e}")
 
     def send_steer(self, value: int):
-        """Send a steering command. Value: -25 to 25."""
-        self._send("steer", value)
+        """
+        Send a servo command. value: -120 to 120.
+        """
+        if not self.is_connected():
+            return
+        angle = max(-120, min(120, value))
+        command = f"SERVO:{angle}\n"
+        with self._lock:
+            try:
+                self._arduino.write(command.encode())
+                print(f"[Serial] TX {command.strip()}")
+            except Exception as e:
+                print(f"[Serial] Write error: {e}")
 
     def is_connected(self) -> bool:
         """Returns True if the serial port is open."""
@@ -142,15 +173,8 @@ class SerialController:
     # ── Private Helpers ───────────────────────────────────────────────────────
 
     def _send(self, key: str, value):
-        """Internal: encode and write a command string to the serial port."""
-        if not self.is_connected():
-            return
-        command = f"#{key}:{value};;\r\n"
-        with self._lock:
-            try:
-                self._arduino.write(command.encode())
-            except Exception as e:
-                print(f"[Serial] Write error: {e}")
+        """Internal: (legacy helper, not used for DC/SERVO protocol)"""
+        pass
 
     def _read_loop(self):
         """Background thread: continuously reads and parses Arduino telemetry."""
@@ -230,8 +254,8 @@ def main():
                 if not -50 <= speed <= 50:
                     print("Speed must be between -50 and 50")
                     continue
-                if not -25 <= angle <= 25:
-                    print("Angle must be between -25 and 25")
+                if not -120 <= angle <= 120:
+                    print("Angle must be between -120 and 120")
                     continue
 
                 ctrl.send_speed(int(speed))

@@ -14,10 +14,12 @@ class SharedState:
 
         # --- Control (skynet.py) dependencies ---
         self.target_speed = 0             # integer -50..50
-        self.target_steer = 0             # integer -25..25
+       
+        self.target_steer = 0             # integer -120..120
         self.imu_data     = {}
         self.encoder_data = {}
         self._pose = {"x_cm": 0.0, "y_cm": 0.0, "heading_rad": 0.0, "dist_cm": 0.0}
+        self._is_in_curve = False
 
     # ── Sign detection ────────────────────────────────────────────────────
     def set_signs(self, result):
@@ -63,6 +65,15 @@ class SharedState:
     def get_lane(self):
         with self._lock:
             return self._lane_result
+
+    # ── Curve State (Multi → Planner) ────────────────────────────────────
+    def set_curve_mode(self, is_in_curve: bool):
+        with self._lock:
+            self._is_in_curve = is_in_curve
+            
+    def get_curve_mode(self) -> bool:
+        with self._lock:
+            return self._is_in_curve
 
     # ── Pose (Odometry → Localization) ───────────────────────────────────
     def set_pose(self, pose: dict):
