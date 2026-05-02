@@ -307,11 +307,6 @@ class SerialThread(threading.Thread):
                 self.ctrl.send_speed(speed)
                 self.ctrl.send_steer(steer)
 
-            pwm = int(abs(speed) / 50 * 255)
-            dc_cmd = f"DC:FORWARD:{pwm}" if speed > 0 else (f"DC:BACKWARD:{pwm}" if speed < 0 else "DC:STOP")
-            servo_cmd = f"SERVO:{max(-120, min(120, steer))}"
-            print(f"{dc_cmd}\\n{servo_cmd}\\n", flush=True)
-
             time.sleep(0.05)  # 20 Hz
 
         if self.ctrl:
