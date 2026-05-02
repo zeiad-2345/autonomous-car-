@@ -1,5 +1,6 @@
 # Autonomous Car Project — BFMC
-demo videos  for lane keeping and detections 
+# demo videos  for lane keeping and detections 
+
 https://drive.google.com/file/d/1wRwLYiO86D03vdNfZBj-Y-MwGzj3990S/view?usp=sharing
 https://drive.google.com/file/d/1s8bD1Vclq2Nk-We2pfZjD46XW4C7hBkn/view?usp=sharing
 
@@ -17,15 +18,6 @@ The car is designed to drive inside a smart-city environment while following lan
 - Motor speed control and steering control
 - Autonomous driving inside a smart-city track
 
-## Demo Videos
-
-### Lane Keeping Demo
-
-[Watch Lane Keeping Demo](PUT_VIDEO_LINK_HERE)
-
-### Detection Demo
-
-[Watch Sign / Pedestrian / Traffic Light Detection Demo](PUT_VIDEO_LINK_HERE)
 
 ## Project Overview
 
