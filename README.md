@@ -1,341 +1,96 @@
-# BFMC - Brain Project
-
-The project contains all the provided code for the RPi, more precisely:
-- Firmware for communicating with the Nucleo and control the robot movements (Speed with constant current consumption, speed with constant speed, braking, moving and steering);
-- Firmware for gathering data from the sensors (IMU and Camera);
-- API's for communicating with the environmental servers at Bosch location;
-- Simulated servers for the API's.
-
-## 🌍 Global System Architecture
-
-```mermaid
-graph TD
-    %% Styling
-    classDef infra fill:#2d3748,stroke:#4a5568,color:#fff
-    classDef web fill:#2b6cb0,stroke:#63b3ed,color:#fff
-    classDef computer fill:#1A4024,stroke:#3D9955,color:#fff
-    classDef brain fill:#6b46c1,stroke:#b794f4,color:#fff
-    classDef perception fill:#805ad5,stroke:#b794f4,color:#fff
-    classDef embedded fill:#744210,stroke:#d69e2e,color:#fff
-    classDef sim fill:#2c7a7b,stroke:#4fd1c5,color:#fff
-    classDef docs fill:#4a5568,stroke:#a0aec0,color:#fff
-
-    subgraph "Infrastructure & Tools"
-        CLI[raven-infrastructure CLI]:::infra
-        DOCS[raven-documentation Sphinx]:::docs
-    end
-
-    subgraph "Presentation & User Interfaces"
-        FUTURA[axel-launch-futura<br>React/Vite Official Web]:::web
-        DASH[raven-computer<br>Remote Dashboard / Telemetry]:::computer
-    end
-
-    subgraph "High-Level Control (Raspberry Pi)"
-        BRAIN[raven-brain-stack<br>Python Multiprocessing]:::brain
-        
-        subgraph "Perception Pipeline"
-            CAMERA[Camera / Frame Receiver]:::perception
-            LANEDET[Lane Detection<br>OpenCV IPM & Polyfit]:::perception
-            STANLEY[Stanley Controller<br>Cross-track & Heading Error]:::perception
-            SIGNDET[Sign Detection<br>YOLOv8 + Filters]:::perception
-            LOCALIZATION[Localization<br>Odometry & Map Graph]:::perception
-            CAMERA --> LANEDET
-            LANEDET --> STANLEY
-            CAMERA --> SIGNDET
-        end
-        
-        PLANNER[Planner / FSM<br>Decision Logic]:::brain
-        SERIAL[Serial Communication<br>Asynchronous UART]:::brain
-
-        STANLEY -->|Steer & Speed Gradients| PLANNER
-        SIGNDET -->|Sign Labels| PLANNER
-        LOCALIZATION <-->|Pose & Drift Correct| PLANNER
-        PLANNER -->|Speed & Steer Commands| SERIAL
-    end
-
-    PLANNER -->|Speed & Steer Commands| SERIAL
-end
-
-subgraph "Low-Level Control (STM32/RP2040)"
-    EMBEDDED[raven-embedded-control C++]:::embedded
-    PID[Speed PID & Steering MPC]:::embedded
-    SAFETY[Dead Man Switch]:::embedded
-
-    EMBEDDED --- PID
-    EMBEDDED --- SAFETY
-end
-
-%% Connections
-CLI -.->|"Deploys/Manages"| BRAIN
-CLI -.->|"Flashes"| EMBEDDED
-DASH <-->|"Socket.IO / Telemetry"| BRAIN
-SERIAL <-->|"USB Serial (#cmds / @telemetry)"| EMBEDDED
-```
-
-## 🏗️ RAVEN/Skynet Architecture
-
-The `raven-brain-stack` operates on a high-speed custom **Python `multiprocessing`** framework. All core components (Perception, Planning, and Serial communication) run as independent processes communicating via shared queues. This ensures low-latency execution and prevents a bottleneck in the main thread during heavy CV processing.
-
-## 🕹️ Remote Control Support (New)
-
-The Brain now includes a dedicated process (`processDashboard`) that listens for SocketIO commands from `raven-computer` and forwards them to the embedded controller.
-
-- **Port**: 5005 (SocketIO)
-- **Commands**: `SpeedMotor`, `SteerMotor`, `Klem` (System State)
-- **Feedback**: Publishes Battery and IMU data back to the Dashboard.
-
-### macOS Compatibility
-The stack has been patched to support macOS environments:
-- **Multiprocessing**: Fixed `spawn` start method issues.
-- **Serial**: Added fallback detection for Arduino devices.
-- **Networking**: `ip_manager` adapted for macOS `ifconfig`.
-
-## 🔌 Serial Communication (Arduino RP2040)
-The Brain communicates with the low-level Arduino embedded controller using a custom asynchronous serial protocol via USB.
-
-- **Script:** `src/serial_controller.py`
-- **Protocol:** `#key:value;;` (Commands) / `@key:value;;\r\n` (Telemetry)
-- **Features:** 
-    - Background Daemon thread continuously parses `@imu` and `@encoder` data.
-    - Non-blocking main thread accepts user keyboard input to send `#speed` and `#steer` commands instantly.
-
-### Running the Controller
-```bash
-python3 src/serial_controller.py
-```
-*(Note: Change `SERIAL_PORT` inside the script if running directly from a Mac instead of the Pi).*
+# Autonomous Car Project — BFMC
 
----
+This project is an autonomous mini-car developed for the Bosch Future Mobility Challenge (BFMC).  
+The car is designed to drive inside a smart-city environment while following lanes, detecting road signs, detecting pedestrians, and responding to traffic lights.
 
-## 🧠 Sign Detection AI (Task 008b)
-
-YOLOv8-based real-time traffic sign detection trained specifically for the 9 BFMC miniature signs. Runs on both the Raspberry Pi 4 and Mac (MPS accelerated).
+## Current Features
 
-### Detected Signs
-Stop · Parking · Priority · Crosswalk · Highway Entrance · Highway Exit · Roundabout · One-way · No-entry
+- Lane keeping and lane following
+- Pedestrian detection
+- Traffic sign detection
+- Traffic light detection
+- Real-time camera processing
+- Raspberry Pi and Arduino integration
+- Motor speed control and steering control
+- Autonomous driving inside a smart-city track
 
-### Model Files (`src/perception/sign_recognition/`)
+## Demo Videos
 
-| File | Description | Accuracy |
-|------|-------------|----------|
-| `bfmc_best_shirts.pt` | ⭐ **RECOMMENDED.** Fine-tuned with negative mining (red shirt rejection). | mAP50: 93.3% |
-| `bfmc_best.pt` | Base model. 100 epochs on Bosch dataset (561 images). | mAP50: 92.7% |
-| `bfmc_last_shirts.pt` | Last checkpoint from shirt fine-tuning (for resuming). | — |
-| `last.pt` | Last checkpoint from base training (for resuming). | — |
+### Lane Keeping Demo
 
-### Training History
+[Watch Lane Keeping Demo](PUT_VIDEO_LINK_HERE)
 
-| Run | Script | Epochs | Dataset | Output |
-|-----|--------|--------|---------|--------|
-| **Run 1** (Base) | `train_signs.py` | 100 | 561 images, 9 classes | `sign_detector/` |
-| **Run 3** (Shirts) | `finetune_shirts.py` | +10 fine-tune | 600 images (561 signs + 39 shirt backgrounds) | `sign_detector_shirts/` |
+### Detection Demo
 
-Run 3 uses **negative mining**: red shirt images with empty label files teach the model "no sign here," reducing false positives on red clothing.
+[Watch Sign / Pedestrian / Traffic Light Detection Demo](PUT_VIDEO_LINK_HERE)
 
-### Quick Usage
+## Project Overview
 
-```bash
-# Live detection with webcam (Mac)
-python3 src/perception/sign_recognition/live_sign_detector.py --model src/perception/sign_recognition/bfmc_best_shirts.pt --webcam
+The system is divided into multiple layers:
 
-# Live detection with Pi Camera (Raspberry Pi)
-python3 src/perception/sign_recognition/live_sign_detector.py --model src/perception/sign_recognition/bfmc_best_shirts.pt
-```
-
-### Post-Detection Filters (Salma's Suggestion)
-After YOLO detects a sign, a filter pipeline validates it using:
-- **Shape Filter:** Checks bounding box aspect ratio (signs ≈ square, cars ≈ wide+flat)
-- **Color Filter:** Verifies dominant HSV hue matches expected sign color (lighting-independent)
-- **Size Filter:** Rejects tiny noise and frame-filling false positives
-
-Filters are enabled by default. Disable with `--no-filters` for debugging.
-
-> Full details: [`src/perception/sign_recognition/README.md`](src/perception/sign_recognition/README.md)
-
----
-
-## The documentation is available in more details here:
-[Documentation](https://bosch-future-mobility-challenge-documentation.readthedocs-hosted.com/)
-
----
-
----
-
-## Feature: IPM Matrix Calculation (002a)
-
-### Overview
-The `002a-ipm-matrix-calc` branch introduces tools to calculate the Inverse Perspective Mapping (IPM) matrix. This transforms the camera's perspective view into a top-down "Bird's-Eye View," essential for:
-- Accurate lane width measurement
-- Obstacle distance estimation
-- Ground plane projection
-
-### Local Development (Mac/PC)
-To test the calibration tools without a Raspberry Pi:
-1.  Initialize the environment:
-    ```bash
-    python3 -m venv venv
-    source venv/bin/activate
-    pip install -r requirements-mac.txt
-    ```
-2.  The `collect_images.py` script will automatically fall back to your webcam if the Pi Camera is not found.
-
-### Tools Added
-Located in `calibration/`:
-
-1.  **`collect_images.py`**
-    - **Purpose**: Captures checkerboard images from the Raspberry Pi Camera.
-    - **Usage**:
-        ```bash
-        python3 calibration/collect_images.py
-        ```
-    - **Controls**: Press 's' to save a frame, 'q' to quit.
-
-2.  **`calibrate_ipm.py`**
-    - **Purpose**: Calculates Intrinsic (Camera) and Extrinsic (Homography) matrices.
-    - **Process**:
-        1.  Detects checkerboards in collected images for intrinsic calibration.
-        2.  Opens a "perspective image" (lane view).
-        3.  User manually clicks 4 points on the ground plane (Clockwise: TL, TR, BR, BL).
-        4.  Generates `calibration/data/calib_data.json`.
-    - **Usage**:
-        ```bash
-        python3 calibration/calibrate_ipm.py --perspective_img <path_to_lane_image>
-        ```
-
-3.  **`verify_ipm.py`**
-    - **Purpose**: Applies the calculated IPM matrix to a test image to verify correctness.
-    - **Usage**:
-        ```bash
-        python3 calibration/verify_ipm.py <path_to_test_image>
-        ```
-
-- `camera_matrix`: Intrinsic parameters
-- `dist_coeffs`: Distortion coefficients
-- `homography_matrix`: The IPM transformation matrix
-
----
-
-## 🚀 Skynet — Step-by-Step Deployment Guide
-
-### What Was Built
-
-Three fully-working standalone scripts have been integrated into one coherent system.
-
-| Script | Role | Status |
-| --- | --- | --- |
-| `src/serial_controller.py` | `SerialController` class + standalone keyboard control | ✅ Refactored |
-| `src/skynet.py` | **Master integration** — 3 threads, all wired up | ✅ NEW |
-| `services/rpi-wifi-fallback/frame_receiver_server.py` | Laptop video window | ✅ Updated to push-mode |
-| `src/perception/sign_recognition/live_sign_detector.py` | Standalone YOLO demo | ✅ Unchanged |
-| `src/perception/sign_recognition/sign_filters.py` | Detection filters | ✅ Unchanged |
-
-### Architecture at a Glance
-
-```
-Pi                                          Mac (SSH)
-─────────────────────────────────           ───────────────────────
-src/skynet.py                               frame_receiver_server.py
-  ├── PerceptionThread                      (port 5012)
-  │     Camera → YOLO + filters              ↑ annotated frames (TCP)
-  │     → publishes sign label
-  │                                         SSH Terminal:
-  ├── PlannerThread                          @imu, @encoder printed live
-  │     sign → SIGN_RULES table
-  │     → publishes speed/steer
-  │
-  └── SerialThread ──USB──► Arduino RP2040
-        #speed / #steer →
-        ← @imu / @encoder
-```
-
-### Step 1: Hardware Setup
-1. Connect the **Arduino RP2040** to the Pi via USB (`/dev/ttyACM0`).
-2. Connect the **Pi Camera** ribbon cable to the CSI port.
-3. Make sure Pi and Mac are on the **same network** (lab WiFi or Pi hotspot).
-
-### Step 2: Install Dependencies (one time, on Pi)
-
-```bash
-pip install ultralytics opencv-python pyserial picamera2
-```
-
-On Mac (for the video viewer):
-```bash
-pip install opencv-python
-```
-
-### Step 3: Run on the Mac first (opens the video window)
-
-```bash
-python3 services/rpi-wifi-fallback/frame_receiver_server.py --display
-```
-
-The window will block until the Pi connects.
-
-### Step 4: Run skynet.py on the Pi (via SSH)
-
-```bash
-ssh captive@<PI_IP>
-cd ~/raven-brain-stack
-python3 src/skynet.py --laptop-ip <YOUR_MAC_IP>
-```
-
-**Common flags:**
-```bash
-python3 src/skynet.py --no-stream      # Skip video streaming
-python3 src/skynet.py --no-arduino     # Bench-test without Arduino
-python3 src/skynet.py --conf 0.35      # Lower YOLO confidence
-python3 src/skynet.py --no-filters     # Disable post-detection filters
-```
-
-### Step 5: What you will see
-
-**Mac OpenCV window:** live camera feed, colored bounding boxes, labels like `STOP 94%`.
-
-**SSH terminal:**
-```
-[Perception] ✅ Pi Camera initialized
-[Perception] ✅ YOLO model loaded: src/perception/sign_recognition/bfmc_best_shirts.pt
-[Serial]     ✅ Connected to Arduino on /dev/ttyACM0
-[Planner]    🚦 STOP                → speed=  0  steer=  0
-[IMU] roll=2.1 pitch=-0.4 yaw=89.2
-[Planner]    ⏱  Stop duration elapsed → resuming cruise
-```
-
-### Step 6: Standalone scripts still work
-
-```bash
-# Mac webcam YOLO test
-python3 src/perception/sign_recognition/live_sign_detector.py --webcam
-
-# Manual Arduino keyboard control
-python3 src/serial_controller.py
-
-# Mac video viewer only
-python3 services/rpi-wifi-fallback/frame_receiver_server.py --display
-```
-
-### Sign Reaction Rules
-
-Edit `SIGN_RULES` at the top of `src/skynet.py`:
-
-```python
-SIGN_RULES = {
-    "stop":             {"speed": 0,   "steer": 0, "duration_s": 3},   # Stop 3 seconds
-    "highway_entrance": {"speed": 30,  "steer": 0, "duration_s": 0},   # Speed up
-    "highway_exit":     {"speed": 12,  "steer": 0, "duration_s": 0},   # Slow down
-    "crosswalk":        {"speed": 10,  "steer": 0, "duration_s": 0},   # Crawl
-    ...
-}
-DEFAULT_SPEED = 15  # Cruise speed between signs
-```
-
-### Troubleshooting
-
-| Problem | Fix |
-| --- | --- |
-| `[Serial] ❌ Failed to open /dev/ttyACM0` | Check USB cable, try `ls /dev/ttyACM*` |
-| Video window doesn't open | Start `frame_receiver_server.py` on Mac **before** `skynet.py` on Pi |
-| YOLO too slow | Lower confidence: `--conf 0.3`, or `--no-filters` |
-| Wrong laptop IP | Run `ip a` on Mac to find IP, pass with `--laptop-ip` |
-| `picamera2` not found | `pip install picamera2`, or use `--webcam-index 0` |
+### High-Level Processing
+
+The high-level system handles computer vision and decision making.  
+It processes camera frames and detects important objects in the environment, such as:
+
+- pedestrians
+- traffic signs
+- traffic lights
+- lane markings
+
+### Low-Level Control
+
+The low-level system controls the physical movement of the car using Arduino.  
+It receives commands for:
+
+- steering angle
+- motor direction
+- motor speed
+- stopping and braking
+
+### Hardware Used
+
+- Raspberry Pi
+- Arduino
+- Camera module / USB camera
+- DC motor
+- Servo motor
+- Motor driver
+- 3D printed car parts
+- Custom wiring and power system
+
+## Technologies Used
+
+- Python
+- OpenCV
+- YOLO / object detection model
+- Arduino C++
+- Serial communication
+- Raspberry Pi
+- Git / GitHub
+
+## My Contribution
+
+I worked on the autonomous driving system, including:
+
+- lane keeping logic
+- object detection integration
+- communication between the Raspberry Pi / laptop and Arduino
+- motor and steering control
+- testing and debugging the car behavior on track
+
+## Project Status
+
+The car is currently able to keep lanes and detect pedestrians, signs, and traffic lights.  
+Further improvements are being made to increase stability, reduce steering oscillations, and improve real-time performance.
+
+## Future Improvements
+
+- Improve lane keeping stability
+- Reduce steering oscillations
+- Improve detection accuracy
+- Optimize FPS and latency
+- Add better decision-making for intersections
+- Improve traffic light handling
+- Improve recovery when the car loses the lane
+
